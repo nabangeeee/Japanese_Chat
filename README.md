@@ -27,7 +27,7 @@ Practice Japanese naturally as if you’re chatting with a real Japanese friend!
 ## 🛠️ Tech Stack
 - **Backend**: FastAPI (Python)  
 - **Frontend**: HTML, CSS, JavaScript  
-- **AI Model**: OpenAI GPT-4o-mini  
+- **AI Model**: OpenAI GPT5 mini  
 - **Storage**: Browser LocalStorage  
 
 ---
