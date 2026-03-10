@@ -8,7 +8,7 @@ Practice Japanese naturally as if you’re chatting with a real Japanese friend!
 ## ✨ Features
 
 ### 🗣️ Chat with an AI Japanese Friend
-- Natural Japanese conversation powered by **GPT-4o-mini**  
+- Natural Japanese conversation powered by **GPT5 mini**  
 - Experience realistic chatting with a Japanese friend  
 - Grammar mistakes are corrected naturally  
 
