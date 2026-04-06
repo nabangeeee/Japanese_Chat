@@ -7,6 +7,9 @@ from openai import OpenAI
 import os
 from dotenv import load_dotenv
 
+from security_filters import redact_sensitive_output, scan_prompt_injection
+from rag_access import rag_access_configured
+
 load_dotenv()
 
 app = FastAPI(title="니혼고챗", description="일본어 학습 채팅 앱")
@@ -30,6 +33,26 @@ class TranslateRequest(BaseModel):
     api_key: str
 
 
+def _assert_no_prompt_injection(text: str) -> None:
+    code = scan_prompt_injection(text)
+    if code:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "prompt_injection_suspected", "code": code},
+        )
+
+
+def _scan_history_for_injection(history: list) -> None:
+    for item in history:
+        if not isinstance(item, dict):
+            continue
+        if item.get("role") != "user":
+            continue
+        content = item.get("content")
+        if isinstance(content, str):
+            _assert_no_prompt_injection(content)
+
+
 def get_system_prompt(partner_name: str, difficulty: str, topic: str) -> str:
     difficulty_prompt = DIFFICULTY_PROMPTS.get(difficulty, DIFFICULTY_PROMPTS["beginner"])
     topic_prompt = TOPIC_PROMPTS.get(topic, TOPIC_PROMPTS["free"])
@@ -43,14 +66,23 @@ def get_system_prompt(partner_name: str, difficulty: str, topic: str) -> str:
 
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+    return templates.TemplateResponse(request, "index.html")
+
+
+@app.get("/api/rag/status")
+async def rag_status():
+    """RAG 서버 토큰 설정 여부. 실제 retrieve 시 `rag_access.assert_rag_collection_access` 사용."""
+    return {"rag_configured": rag_access_configured()}
 
 
 @app.post("/api/chat")
 async def chat(req: ChatRequest):
     if not req.api_key:
         raise HTTPException(status_code=400, detail="API 키가 필요합니다.")
-    
+
+    _assert_no_prompt_injection(req.message)
+    _scan_history_for_injection(req.history)
+
     try:
         client = OpenAI(api_key=req.api_key)
         
@@ -65,7 +97,8 @@ async def chat(req: ChatRequest):
             max_tokens=1000
         )
         
-        return {"response": response.choices[0].message.content}
+        raw = response.choices[0].message.content or ""
+        return {"response": redact_sensitive_output(raw)}
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -75,7 +108,9 @@ async def chat(req: ChatRequest):
 async def translate(req: TranslateRequest):
     if not req.api_key:
         raise HTTPException(status_code=400, detail="API 키가 필요합니다.")
-    
+
+    _assert_no_prompt_injection(req.text)
+
     try:
         client = OpenAI(api_key=req.api_key)
         
@@ -89,7 +124,8 @@ async def translate(req: TranslateRequest):
             max_tokens=500
         )
         
-        return {"translation": response.choices[0].message.content}
+        raw = response.choices[0].message.content or ""
+        return {"translation": redact_sensitive_output(raw)}
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -99,7 +135,9 @@ async def translate(req: TranslateRequest):
 async def furigana(req: TranslateRequest):
     if not req.api_key:
         raise HTTPException(status_code=400, detail="API 키가 필요합니다.")
-    
+
+    _assert_no_prompt_injection(req.text)
+
     try:
         client = OpenAI(api_key=req.api_key)
         
@@ -113,7 +151,8 @@ async def furigana(req: TranslateRequest):
             max_tokens=500
         )
         
-        return {"furigana": response.choices[0].message.content}
+        raw = response.choices[0].message.content or ""
+        return {"furigana": redact_sensitive_output(raw)}
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
