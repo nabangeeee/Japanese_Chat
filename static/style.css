@@ -601,5 +601,120 @@ input:checked + .slider:before {
     .topic-grid {
         grid-template-columns: 1fr;
     }
+
+    .roleplay-grid {
+        grid-template-columns: 1fr !important;
+    }
 }
+
+/* MCP 롤플레잉 프롬프트 스타일 */
+.roleplay-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+    margin-top: 10px;
+}
+
+.roleplay-card {
+    padding: 12px;
+    border: 2px solid #e8e8e8;
+    border-radius: 12px;
+    background: var(--white);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+}
+
+.roleplay-card:hover {
+    border-color: var(--primary-light);
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.04);
+}
+
+.roleplay-card.active {
+    border-color: var(--primary);
+    background: #FFF5F7;
+}
+
+.rp-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+}
+
+.rp-card-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.rp-card-badge {
+    font-size: 10px;
+    padding: 2px 6px;
+    background: #eef1f6;
+    color: #556070;
+    border-radius: 6px;
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.roleplay-card.active .rp-card-badge {
+    background: var(--primary);
+    color: var(--white);
+}
+
+.rp-card-desc {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 6px;
+    line-height: 1.4;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.roleplay-args-box {
+    margin-top: 12px;
+    padding: 12px 14px;
+    background: #fafafa;
+    border: 1px dashed var(--primary-light);
+    border-radius: 12px;
+}
+
+.rp-args-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--primary);
+    margin-bottom: 10px;
+}
+
+.rp-arg-row {
+    margin-bottom: 8px;
+}
+
+.rp-arg-row:last-child {
+    margin-bottom: 0;
+}
+
+.rp-arg-label {
+    display: block;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    margin-bottom: 4px;
+}
+
+.rp-arg-input {
+    width: 100%;
+    padding: 8px 12px !important;
+    font-size: 13px !important;
+    border-radius: 8px !important;
+    background: var(--white) !important;
+    border: 1px solid #e0e0e0 !important;
+}
+
 

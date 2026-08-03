@@ -32,6 +32,8 @@
             <span class="status-item" id="difficultyStatus">📚 초급</span>
             <span class="status-divider">•</span>
             <span class="status-item" id="topicStatus">💬 자유 대화</span>
+            <span class="status-divider">•</span>
+            <span class="status-item" id="roleplayStatus">🎭 일반 대화</span>
         </div>
 
         <!-- 채팅 영역 -->
@@ -108,6 +110,18 @@
                             <button class="topic-btn" data-value="culture" onclick="selectTopic(this)">문화</button>
                             <button class="topic-btn" data-value="business" onclick="selectTopic(this)">비즈니스</button>
                             <button class="topic-btn" data-value="anime" onclick="selectTopic(this)">애니/만화</button>
+                        </div>
+                    </div>
+
+                    <!-- MCP 롤플레잉 프롬프트 세션 -->
+                    <div class="setting-section">
+                        <label class="setting-label">🎭 상황별 롤플레잉 (MCP Prompts)</label>
+                        <p class="setting-hint">MCP 규격 표준 프롬프트 기반으로 특정 상황을 체험합니다.</p>
+                        <div class="roleplay-grid" id="roleplayContainer">
+                            <!-- JS로 동적 생성 -->
+                        </div>
+                        <div class="roleplay-args-box" id="roleplayArgsContainer" style="display: none;">
+                            <!-- 세부 세팅 입력 폼 -->
                         </div>
                     </div>
 

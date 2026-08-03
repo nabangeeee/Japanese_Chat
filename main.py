@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 
 from security_filters import redact_sensitive_output, scan_prompt_injection
 from rag_access import rag_access_configured
+from mcp_prompts import list_mcp_prompts, get_mcp_prompt_instruction
 
 load_dotenv()
 
@@ -26,11 +27,18 @@ class ChatRequest(BaseModel):
     partner_name: str = "유키"
     difficulty: str = "beginner"
     topic: str = "free"
+    roleplay_id: str | None = None
+    roleplay_args: dict | None = None
 
 
 class TranslateRequest(BaseModel):
     text: str
     api_key: str
+
+
+class MCPGetPromptRequest(BaseModel):
+    id: str
+    arguments: dict = {}
 
 
 def _assert_no_prompt_injection(text: str) -> None:
@@ -53,15 +61,23 @@ def _scan_history_for_injection(history: list) -> None:
             _assert_no_prompt_injection(content)
 
 
-def get_system_prompt(partner_name: str, difficulty: str, topic: str) -> str:
+def get_system_prompt(partner_name: str, difficulty: str, topic: str, roleplay_id: str | None = None, roleplay_args: dict | None = None) -> str:
     difficulty_prompt = DIFFICULTY_PROMPTS.get(difficulty, DIFFICULTY_PROMPTS["beginner"])
     topic_prompt = TOPIC_PROMPTS.get(topic, TOPIC_PROMPTS["free"])
     
-    return SYSTEM_PROMPT_TEMPLATE.format(
+    roleplay_instruction = ""
+    if roleplay_id:
+        rp_text = get_mcp_prompt_instruction(roleplay_id, roleplay_args)
+        if rp_text:
+            roleplay_instruction = f"\n\n[Active Roleplay Scenario (MCP Prompt)]\n{rp_text}"
+    
+    base_prompt = SYSTEM_PROMPT_TEMPLATE.format(
         partner_name=partner_name,
         difficulty_prompt=difficulty_prompt,
         topic_prompt=topic_prompt
     )
+    
+    return base_prompt + roleplay_instruction
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -75,6 +91,21 @@ async def rag_status():
     return {"rag_configured": rag_access_configured()}
 
 
+@app.get("/api/mcp/prompts")
+async def mcp_prompts_list():
+    """MCP Prompts 표준 규격에 따라 등록된 상황별 롤플레잉 프롬프트 목록 반환"""
+    return {"prompts": list_mcp_prompts()}
+
+
+@app.post("/api/mcp/prompts/get")
+async def mcp_prompts_get(req: MCPGetPromptRequest):
+    """특정 MCP Prompt ID와 arguments를 받아 렌더링된 프롬프트 반환"""
+    instruction = get_mcp_prompt_instruction(req.id, req.arguments)
+    if not instruction:
+        raise HTTPException(status_code=440, detail="요청한 MCP Prompt를 찾을 수 없습니다.")
+    return {"prompt_id": req.id, "instruction": instruction}
+
+
 @app.post("/api/chat")
 async def chat(req: ChatRequest):
     if not req.api_key:
@@ -86,7 +117,14 @@ async def chat(req: ChatRequest):
     try:
         client = OpenAI(api_key=req.api_key)
         
-        messages = [{"role": "system", "content": get_system_prompt(req.partner_name, req.difficulty, req.topic)}]
+        sys_prompt = get_system_prompt(
+            req.partner_name, 
+            req.difficulty, 
+            req.topic, 
+            req.roleplay_id, 
+            req.roleplay_args
+        )
+        messages = [{"role": "system", "content": sys_prompt}]
         messages.extend(req.history[-10:])  # 최근 10개 대화만
         messages.append({"role": "user", "content": req.message})
         
@@ -142,7 +180,7 @@ async def furigana(req: TranslateRequest):
         client = OpenAI(api_key=req.api_key)
         
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-5o-mini",
             messages=[
                 {"role": "system", "content": FURIGANA_PROMPT},
                 {"role": "user", "content": req.text}
