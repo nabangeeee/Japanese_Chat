@@ -468,7 +468,7 @@ async function sendMessage() {
     if (!content || state.isLoading) return;
     
     if (!state.settings.apiKey) {
-        alert('OpenAI API 키를 설정해주세요.');
+        alert('Google Gemini API 키를 설정해주세요.');
         toggleSettings();
         return;
     }

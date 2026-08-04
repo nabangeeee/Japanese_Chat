@@ -3,8 +3,9 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
-from openai import OpenAI
-from langsmith.wrappers import wrap_openai
+from google import genai
+from google.genai import types
+from langsmith import traceable
 import os
 from dotenv import load_dotenv
 
@@ -108,6 +109,7 @@ async def mcp_prompts_get(req: MCPGetPromptRequest):
 
 
 @app.post("/api/chat")
+@traceable(name="gemini_chat")
 async def chat(req: ChatRequest):
     if not req.api_key:
         raise HTTPException(status_code=400, detail="API 키가 필요합니다.")
@@ -116,7 +118,7 @@ async def chat(req: ChatRequest):
     _scan_history_for_injection(req.history)
 
     try:
-        client = wrap_openai(OpenAI(api_key=req.api_key))
+        client = genai.Client(api_key=req.api_key)
         
         sys_prompt = get_system_prompt(
             req.partner_name, 
@@ -125,18 +127,29 @@ async def chat(req: ChatRequest):
             req.roleplay_id, 
             req.roleplay_args
         )
-        messages = [{"role": "system", "content": sys_prompt}]
-        messages.extend(req.history[-10:])  # 최근 10개 대화만
-        messages.append({"role": "user", "content": req.message})
         
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=messages,
+        contents = []
+        for item in req.history[-10:]:
+            role = "user" if item.get("role") == "user" else "model"
+            content = item.get("content", "")
+            if content:
+                contents.append(types.Content(role=role, parts=[types.Part.from_text(text=content)]))
+        
+        contents.append(types.Content(role="user", parts=[types.Part.from_text(text=req.message)]))
+        
+        config = types.GenerateContentConfig(
+            system_instruction=sys_prompt,
             temperature=0.8,
-            max_tokens=1000
+            max_output_tokens=1000
         )
         
-        raw = response.choices[0].message.content or ""
+        response = client.models.generate_content(
+            model="gemini-3.5-flash",
+            contents=contents,
+            config=config
+        )
+        
+        raw = response.text or ""
         return {"response": redact_sensitive_output(raw)}
     
     except Exception as e:
@@ -144,6 +157,7 @@ async def chat(req: ChatRequest):
 
 
 @app.post("/api/translate")
+@traceable(name="gemini_translate")
 async def translate(req: TranslateRequest):
     if not req.api_key:
         raise HTTPException(status_code=400, detail="API 키가 필요합니다.")
@@ -151,19 +165,21 @@ async def translate(req: TranslateRequest):
     _assert_no_prompt_injection(req.text)
 
     try:
-        client = wrap_openai(OpenAI(api_key=req.api_key))
+        client = genai.Client(api_key=req.api_key)
         
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": TRANSLATE_PROMPT},
-                {"role": "user", "content": req.text}
-            ],
+        config = types.GenerateContentConfig(
+            system_instruction=TRANSLATE_PROMPT,
             temperature=0.3,
-            max_tokens=500
+            max_output_tokens=500
         )
         
-        raw = response.choices[0].message.content or ""
+        response = client.models.generate_content(
+            model="gemini-3.5-flash",
+            contents=req.text,
+            config=config
+        )
+        
+        raw = response.text or ""
         return {"translation": redact_sensitive_output(raw)}
     
     except Exception as e:
@@ -171,6 +187,7 @@ async def translate(req: TranslateRequest):
 
 
 @app.post("/api/furigana")
+@traceable(name="gemini_furigana")
 async def furigana(req: TranslateRequest):
     if not req.api_key:
         raise HTTPException(status_code=400, detail="API 키가 필요합니다.")
@@ -178,19 +195,21 @@ async def furigana(req: TranslateRequest):
     _assert_no_prompt_injection(req.text)
 
     try:
-        client = wrap_openai(OpenAI(api_key=req.api_key))
+        client = genai.Client(api_key=req.api_key)
         
-        response = client.chat.completions.create(
-            model="gpt-5o-mini",
-            messages=[
-                {"role": "system", "content": FURIGANA_PROMPT},
-                {"role": "user", "content": req.text}
-            ],
+        config = types.GenerateContentConfig(
+            system_instruction=FURIGANA_PROMPT,
             temperature=0.1,
-            max_tokens=500
+            max_output_tokens=500
         )
         
-        raw = response.choices[0].message.content or ""
+        response = client.models.generate_content(
+            model="gemini-3.5-flash",
+            contents=req.text,
+            config=config
+        )
+        
+        raw = response.text or ""
         return {"furigana": redact_sensitive_output(raw)}
     
     except Exception as e:

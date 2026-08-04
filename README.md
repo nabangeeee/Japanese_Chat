@@ -8,7 +8,7 @@ Practice Japanese naturally as if you’re chatting with a real Japanese friend!
 ## ✨ Features
 
 ### 🗣️ Chat with an AI Japanese Friend
-- Natural Japanese conversation powered by **GPT5 mini**  
+- Natural Japanese conversation powered by **Google Gemini 2.5 Flash**  
 - Experience realistic chatting with a Japanese friend  
 - Grammar mistakes are corrected naturally  
 
@@ -27,7 +27,7 @@ Practice Japanese naturally as if you’re chatting with a real Japanese friend!
 ## 🛠️ Tech Stack
 - **Backend**: FastAPI (Python)  
 - **Frontend**: HTML, CSS, JavaScript  
-- **AI Model**: OpenAI GPT5 mini  
+- **AI Model**: Google Gemini 2.5 Flash (google-genai)  
 - **Storage**: Browser LocalStorage  
 
 ---
@@ -36,7 +36,7 @@ Practice Japanese naturally as if you’re chatting with a real Japanese friend!
 
 ### Requirements
 - Python 3.9+  
-- OpenAI API key  
+- Google Gemini API key (from Google AI Studio)  
 
 ### Installation
 ```bash
