@@ -13,7 +13,7 @@ from mcp_prompts import list_mcp_prompts, get_mcp_prompt_instruction
 
 load_dotenv()
 
-app = FastAPI(title="니혼고챗", description="일본어 학습 채팅 앱")
+app = FastAPI(title="니혼고챗", description="일본어 학습 채팅 앱") #웹 문서 페이지 맨 위에 표시되는 문구
 
 # 정적 파일 및 템플릿 설정
 app.mount("/static", StaticFiles(directory="static"), name="static")
