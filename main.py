@@ -4,6 +4,7 @@ from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from openai import OpenAI
+from langsmith.wrappers import wrap_openai
 import os
 from dotenv import load_dotenv
 
@@ -115,7 +116,7 @@ async def chat(req: ChatRequest):
     _scan_history_for_injection(req.history)
 
     try:
-        client = OpenAI(api_key=req.api_key)
+        client = wrap_openai(OpenAI(api_key=req.api_key))
         
         sys_prompt = get_system_prompt(
             req.partner_name, 
@@ -150,7 +151,7 @@ async def translate(req: TranslateRequest):
     _assert_no_prompt_injection(req.text)
 
     try:
-        client = OpenAI(api_key=req.api_key)
+        client = wrap_openai(OpenAI(api_key=req.api_key))
         
         response = client.chat.completions.create(
             model="gpt-4o-mini",
@@ -177,7 +178,7 @@ async def furigana(req: TranslateRequest):
     _assert_no_prompt_injection(req.text)
 
     try:
-        client = OpenAI(api_key=req.api_key)
+        client = wrap_openai(OpenAI(api_key=req.api_key))
         
         response = client.chat.completions.create(
             model="gpt-5o-mini",
