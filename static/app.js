@@ -530,44 +530,47 @@ async function sendMessage() {
             timestamp: new Date().toISOString()
         };
         
-        // 번역 가져오기
+        // 번역 및 후리가나 병렬(Promise.all) 요청
+        const asyncTasks = [];
+
         if (state.settings.showTranslation) {
-            try {
-                const transRes = await fetch('/api/translate', {
+            asyncTasks.push(
+                fetch('/api/translate', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         text: data.response,
                         api_key: state.settings.apiKey
                     })
-                });
-                if (transRes.ok) {
-                    const transData = await transRes.json();
-                    assistantMessage.translation = transData.translation;
-                }
-            } catch (e) {
-                console.error('Translation failed:', e);
-            }
+                })
+                .then(res => res.ok ? res.json() : null)
+                .then(transData => {
+                    if (transData) assistantMessage.translation = transData.translation;
+                })
+                .catch(e => console.error('Translation failed:', e))
+            );
         }
-        
-        // 후리가나 가져오기
+
         if (state.settings.showFurigana) {
-            try {
-                const furiRes = await fetch('/api/furigana', {
+            asyncTasks.push(
+                fetch('/api/furigana', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         text: data.response,
                         api_key: state.settings.apiKey
                     })
-                });
-                if (furiRes.ok) {
-                    const furiData = await furiRes.json();
-                    assistantMessage.furigana = furiData.furigana;
-                }
-            } catch (e) {
-                console.error('Furigana failed:', e);
-            }
+                })
+                .then(res => res.ok ? res.json() : null)
+                .then(furiData => {
+                    if (furiData) assistantMessage.furigana = furiData.furigana;
+                })
+                .catch(e => console.error('Furigana failed:', e))
+            );
+        }
+
+        if (asyncTasks.length > 0) {
+            await Promise.all(asyncTasks);
         }
         
         state.messages.push(assistantMessage);

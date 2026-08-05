@@ -7,6 +7,7 @@ from google import genai
 from google.genai import types
 from langsmith import traceable
 import os
+import time
 from dotenv import load_dotenv
 
 from security_filters import redact_sensitive_output, scan_prompt_injection
@@ -108,6 +109,18 @@ async def mcp_prompts_get(req: MCPGetPromptRequest):
     return {"prompt_id": req.id, "instruction": instruction}
 
 
+# 구글 웹 검색 RAG 트리거 전용 키워드 (기본값 OFF, 명확한 뉴스/유행/트렌드 키워드에서만 켜짐)
+STRICT_SEARCH_KEYWORDS = [
+    "뉴스", "유행", "트렌드", "실시간", "구글 검색", "웹 검색", "핫이슈",
+    "ニュース", "トレンド", "リアルタイム", "話題", "流行り"
+]
+
+
+def _needs_web_search(message: str) -> bool:
+    msg = message.lower()
+    return any(keyword in msg for keyword in STRICT_SEARCH_KEYWORDS)
+
+
 @app.post("/api/chat")
 @traceable(name="gemini_chat")
 async def chat(req: ChatRequest):
@@ -137,19 +150,49 @@ async def chat(req: ChatRequest):
         
         contents.append(types.Content(role="user", parts=[types.Part.from_text(text=req.message)]))
         
-        config = types.GenerateContentConfig(
-            system_instruction=sys_prompt,
-            temperature=0.8,
-            max_output_tokens=1000,
-            tools=[types.Tool(google_search=types.GoogleSearch())]
-        )
+        start_t = time.time()
+        use_search = _needs_web_search(req.message)
+        print(f"[Chat API START] Message: '{req.message}' | Search Triggered: {use_search}")
         
-        response = client.models.generate_content(
-            model="gemini-3.5-flash",
-            contents=contents,
-            config=config
-        )
+        if use_search:
+            config_search = types.GenerateContentConfig(
+                system_instruction=sys_prompt,
+                temperature=0.8,
+                max_output_tokens=1000,
+                tools=[types.Tool(google_search=types.GoogleSearch())]
+            )
+            try:
+                response = client.models.generate_content(
+                    model="gemini-3.5-flash",
+                    contents=contents,
+                    config=config_search
+                )
+            except Exception as search_err:
+                print(f"[Chat API] Search failed ({search_err}). Falling back to basic mode.")
+                config_basic = types.GenerateContentConfig(
+                    system_instruction=sys_prompt,
+                    temperature=0.8,
+                    max_output_tokens=1000
+                )
+                response = client.models.generate_content(
+                    model="gemini-3.5-flash",
+                    contents=contents,
+                    config=config_basic
+                )
+        else:
+            config_basic = types.GenerateContentConfig(
+                system_instruction=sys_prompt,
+                temperature=0.8,
+                max_output_tokens=1000
+            )
+            response = client.models.generate_content(
+                model="gemini-3.5-flash",
+                contents=contents,
+                config=config_basic
+            )
         
+        elapsed = time.time() - start_t
+        print(f"[Chat API END] Completed in {elapsed:.2f} seconds.")
         raw = response.text or ""
         return {"response": redact_sensitive_output(raw)}
     
@@ -166,6 +209,7 @@ async def translate(req: TranslateRequest):
     _assert_no_prompt_injection(req.text)
 
     try:
+        start_t = time.time()
         client = genai.Client(api_key=req.api_key)
         
         config = types.GenerateContentConfig(
@@ -180,6 +224,8 @@ async def translate(req: TranslateRequest):
             config=config
         )
         
+        elapsed = time.time() - start_t
+        print(f"[Translate API END] Completed in {elapsed:.2f} seconds.")
         raw = response.text or ""
         return {"translation": redact_sensitive_output(raw)}
     
@@ -196,6 +242,7 @@ async def furigana(req: TranslateRequest):
     _assert_no_prompt_injection(req.text)
 
     try:
+        start_t = time.time()
         client = genai.Client(api_key=req.api_key)
         
         config = types.GenerateContentConfig(
@@ -210,6 +257,8 @@ async def furigana(req: TranslateRequest):
             config=config
         )
         
+        elapsed = time.time() - start_t
+        print(f"[Furigana API END] Completed in {elapsed:.2f} seconds.")
         raw = response.text or ""
         return {"furigana": redact_sensitive_output(raw)}
     
