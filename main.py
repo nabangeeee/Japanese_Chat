@@ -140,7 +140,8 @@ async def chat(req: ChatRequest):
         config = types.GenerateContentConfig(
             system_instruction=sys_prompt,
             temperature=0.8,
-            max_output_tokens=1000
+            max_output_tokens=1000,
+            tools=[types.Tool(google_search=types.GoogleSearch())]
         )
         
         response = client.models.generate_content(
