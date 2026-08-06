@@ -370,50 +370,42 @@ async function toggleDetails(messageId) {
         details.innerHTML = '<div class="detail-section"><div class="detail-text">로딩 중...</div></div>';
         details.classList.add('show');
         
-        // 번역 가져오기
+        const tasks = [];
+
         if (needsTranslation && state.settings.apiKey) {
-            try {
-                const res = await fetch('/api/translate', {
+            tasks.push(
+                fetch('/api/translate', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        text: message.content,
-                        api_key: state.settings.apiKey
-                    })
-                });
-                if (res.ok) {
-                    const data = await res.json();
-                    message.translation = data.translation;
-                }
-            } catch (e) {
-                console.error('Translation failed:', e);
-            }
+                    body: JSON.stringify({ text: message.content, api_key: state.settings.apiKey })
+                })
+                .then(res => res.ok ? res.json() : null)
+                .then(data => { if (data) message.translation = data.translation; })
+                .catch(e => console.error('Translation failed:', e))
+            );
         }
-        
-        // 후리가나 가져오기
+
         if (needsFurigana && state.settings.apiKey) {
-            try {
-                const res = await fetch('/api/furigana', {
+            tasks.push(
+                fetch('/api/furigana', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        text: message.content,
-                        api_key: state.settings.apiKey
-                    })
-                });
-                if (res.ok) {
-                    const data = await res.json();
-                    message.furigana = data.furigana;
-                }
-            } catch (e) {
-                console.error('Furigana failed:', e);
-            }
+                    body: JSON.stringify({ text: message.content, api_key: state.settings.apiKey })
+                })
+                .then(res => res.ok ? res.json() : null)
+                .then(data => { if (data) message.furigana = data.furigana; })
+                .catch(e => console.error('Furigana failed:', e))
+            );
         }
         
-        // 메시지 저장 및 다시 렌더링
+        // 100% 완전하게 완료될 때까지 기다림
+        if (tasks.length > 0) {
+            await Promise.all(tasks);
+        }
+        
         saveMessages();
         
-        // 상세 정보 업데이트
+        // 상세 정보 100% 완제품 업데이트
         details.innerHTML = `
             ${message.furigana && state.settings.showFurigana ? `
                 <div class="detail-section">
@@ -428,9 +420,9 @@ async function toggleDetails(messageId) {
                 </div>
             ` : ''}
         `;
+    } else {
+        details.classList.add('show');
     }
-    
-    details.classList.add('show');
 }
 
 // 타이핑 인디케이터
@@ -522,56 +514,13 @@ async function sendMessage() {
         
         const data = await response.json();
         
-        // AI 메시지 생성
+        // AI 메시지 생성 후 화면에 100% 즉시 출력
         const assistantMessage = {
             id: (Date.now() + 1).toString(),
             role: 'assistant',
             content: data.response,
             timestamp: new Date().toISOString()
         };
-        
-        // 번역 및 후리가나 병렬(Promise.all) 요청
-        const asyncTasks = [];
-
-        if (state.settings.showTranslation) {
-            asyncTasks.push(
-                fetch('/api/translate', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        text: data.response,
-                        api_key: state.settings.apiKey
-                    })
-                })
-                .then(res => res.ok ? res.json() : null)
-                .then(transData => {
-                    if (transData) assistantMessage.translation = transData.translation;
-                })
-                .catch(e => console.error('Translation failed:', e))
-            );
-        }
-
-        if (state.settings.showFurigana) {
-            asyncTasks.push(
-                fetch('/api/furigana', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        text: data.response,
-                        api_key: state.settings.apiKey
-                    })
-                })
-                .then(res => res.ok ? res.json() : null)
-                .then(furiData => {
-                    if (furiData) assistantMessage.furigana = furiData.furigana;
-                })
-                .catch(e => console.error('Furigana failed:', e))
-            );
-        }
-
-        if (asyncTasks.length > 0) {
-            await Promise.all(asyncTasks);
-        }
         
         state.messages.push(assistantMessage);
         saveMessages();

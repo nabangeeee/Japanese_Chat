@@ -333,15 +333,19 @@ Important Rules:
 # --------------------------------------------------------------------------------------
 
 # Translation Prompt
-TRANSLATE_PROMPT = """You are a translator. Please translate the given Japanese into Korean. Output only the translation."""
+TRANSLATE_PROMPT = """주어진 일본어 문장을 자연스러운 한국어로 번역하세요.
+중요 지침:
+- 영어 설명, 부연 해설, 서식 표식(*, Sentence 등) 없이 오직 한국어 번역 결과 문장만 그대로 출력하세요.
+- 예: "안녕하세요. 오늘 날씨가 참 좋네요." """
 
 # --------------------------------------------------------------------------------------
 
 # Furigana Prompt
-FURIGANA_PROMPT = """Please add furigana to the given Japanese sentence.
-Display the reading in hiragana next to the kanji.
-Format: Kanji(furigana)
-Example: 今日(きょう)は天気(てんき)がいいですね。"""
+FURIGANA_PROMPT = """주어진 일본어 문장의 한자 뒤에 괄호로 히라가나 읽는 법(후리가나)을 달아주세요.
+중요 지침:
+- 영어 설명, 부연 해설, 서식 표식 없이 오직 후리가나가 표시된 일본어 문장만 그대로 출력하세요.
+- 형식: 한자(히라가나)
+- 예: 今日(きょう)は天気(てんき)がいいですね。"""
 
 # --------------------------------------------------------------------------------------
 
