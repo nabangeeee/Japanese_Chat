@@ -1,6 +1,9 @@
 // 상태 관리
 let state = {
     messages: [],
+    sessions: [],
+    currentSessionId: null,
+    memories: [],
     isLoading: false,
     settings: {
         apiKey: '',
@@ -42,7 +45,7 @@ const settingsModal = document.getElementById('settingsModal');
 // 초기화
 document.addEventListener('DOMContentLoaded', () => {
     loadSettings();
-    loadMessages();
+    initSessionSystem();
     fetchMcpPrompts();
     
     // 자동 높이 조절
@@ -227,14 +230,11 @@ function saveSettings() {
     // localStorage에 저장
     localStorage.setItem('nihongoSettings', JSON.stringify(state.settings));
     
-    // 난이도, 주제, 롤플레잉이 바뀌면 대화 새로 시작
+    // 난이도, 주제, 롤플레잉이 바뀌면 이전 세션은 DB에 안전 보존하고 새로운 세션 생성
     const settingsChanged = (prevDifficulty !== newDifficulty || prevTopic !== newTopic || prevRoleplayId !== state.settings.roleplayId);
     
     if (settingsChanged) {
-        // 이전 대화 삭제
-        state.messages = [];
-        localStorage.removeItem('nihongoMessages');
-        addWelcomeMessage();
+        startNewSession(false);
     } else if (state.messages.length === 0) {
         addWelcomeMessage();
     }
@@ -244,6 +244,196 @@ function saveSettings() {
     
     // 모달 닫기
     toggleSettings();
+}
+
+// --- DB SESSION & MEMORY MANAGEMENT ---
+
+async function initSessionSystem() {
+    try {
+        const res = await fetch('/api/sessions');
+        if (res.ok) {
+            const data = await res.json();
+            state.sessions = data.sessions || [];
+            
+            if (state.sessions.length > 0) {
+                await switchSession(state.sessions[0].session_id, false);
+            } else {
+                await startNewSession(false);
+            }
+        }
+    } catch (e) {
+        console.error('Session init failed:', e);
+        loadMessages();
+    }
+}
+
+async function startNewSession(closeDrawer = true) {
+    try {
+        const title = `${TOPIC_NAMES[state.settings.topic] || '자유 대화'} (${DIFFICULTY_NAMES[state.settings.difficulty] || '초급'})`;
+        const res = await fetch('/api/sessions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                title: title,
+                partner_name: state.settings.partnerName,
+                difficulty: state.settings.difficulty,
+                topic: state.settings.topic,
+                roleplay_id: state.settings.roleplayId
+            })
+        });
+        if (res.ok) {
+            const data = await res.json();
+            const newSess = data.session;
+            state.sessions.unshift(newSess);
+            state.currentSessionId = newSess.session_id;
+            state.messages = [];
+            
+            addWelcomeMessage();
+            renderSessionList();
+            if (closeDrawer) toggleSessionDrawer();
+        }
+    } catch (e) {
+        console.error('Create session failed:', e);
+    }
+}
+
+async function switchSession(sessionId, closeDrawer = true) {
+    try {
+        const res = await fetch(`/api/sessions/${sessionId}`);
+        if (res.ok) {
+            const data = await res.json();
+            state.currentSessionId = sessionId;
+            state.messages = data.messages || [];
+            
+            // 세션에 저장된 메시지가 없으면 웰컴 메시지 추가
+            if (state.messages.length === 0) {
+                addWelcomeMessage();
+            } else {
+                renderMessages();
+            }
+            
+            renderSessionList();
+            if (closeDrawer) toggleSessionDrawer();
+        }
+    } catch (e) {
+        console.error('Switch session failed:', e);
+    }
+}
+
+async function deleteSessionItem(event, sessionId) {
+    event.stopPropagation();
+    if (!confirm('이 대화 세션을 삭제하시겠습니까?')) return;
+    try {
+        const res = await fetch(`/api/sessions/${sessionId}`, { method: 'DELETE' });
+        if (res.ok) {
+            state.sessions = state.sessions.filter(s => s.session_id !== sessionId);
+            if (state.currentSessionId === sessionId) {
+                if (state.sessions.length > 0) {
+                    await switchSession(state.sessions[0].session_id, false);
+                } else {
+                    await startNewSession(false);
+                }
+            } else {
+                renderSessionList();
+            }
+        }
+    } catch (e) {
+        console.error('Delete session failed:', e);
+    }
+}
+
+function toggleSessionDrawer() {
+    const backdrop = document.getElementById('drawerBackdrop');
+    const drawer = document.getElementById('sessionDrawer');
+    if (!backdrop || !drawer) return;
+
+    const isActive = drawer.classList.contains('active');
+    if (isActive) {
+        drawer.classList.remove('active');
+        backdrop.classList.remove('active');
+        setTimeout(() => {
+            drawer.style.display = 'none';
+            backdrop.style.display = 'none';
+        }, 300);
+    } else {
+        renderSessionList();
+        drawer.style.display = 'flex';
+        backdrop.style.display = 'block';
+        setTimeout(() => {
+            drawer.classList.add('active');
+            backdrop.classList.add('active');
+        }, 10);
+    }
+}
+
+function renderSessionList() {
+    const container = document.getElementById('sessionList');
+    if (!container) return;
+
+    if (state.sessions.length === 0) {
+        container.innerHTML = '<p style="text-align:center; color: var(--text-muted); padding: 20px;">저장된 세션이 없습니다.</p>';
+        return;
+    }
+
+    container.innerHTML = state.sessions.map(s => {
+        const isActive = s.session_id === state.currentSessionId;
+        const dateStr = new Date(s.updated_at || s.created_at).toLocaleDateString('ko-KR', {
+            month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+        });
+        return `
+            <div class="session-item ${isActive ? 'active' : ''}" onclick="switchSession('${s.session_id}')">
+                <div class="session-item-info">
+                    <span class="session-item-title">${escapeHTML(s.title || '대화')}</span>
+                    <span class="session-item-sub">👤 ${escapeHTML(s.partner_name)} • ${dateStr}</span>
+                </div>
+                <button class="session-delete-btn" onclick="deleteSessionItem(event, '${s.session_id}')" title="삭제">🗑️</button>
+            </div>
+        `;
+    }).join('');
+}
+
+async function toggleMemoryModal() {
+    const modalBackdrop = document.getElementById('memoryModalBackdrop');
+    if (!modalBackdrop) return;
+
+    const isActive = modalBackdrop.classList.contains('show');
+    if (isActive) {
+        modalBackdrop.classList.remove('show');
+    } else {
+        modalBackdrop.classList.add('show');
+        await loadAndRenderMemories();
+    }
+}
+
+async function loadAndRenderMemories() {
+    const body = document.getElementById('memoryListBody');
+    if (!body) return;
+    body.innerHTML = '<p style="text-align:center; color: var(--text-muted); padding: 20px;">로딩 중...</p>';
+    try {
+        const res = await fetch('/api/memories');
+        if (res.ok) {
+            const data = await res.json();
+            state.memories = data.memories || [];
+            if (state.memories.length === 0) {
+                body.innerHTML = '<p style="text-align:center; color: var(--text-muted); padding: 20px; line-height: 1.6;">아직 축적된 오답 노어가 없습니다.<br>AI와 일본어로 회화하면서 틀린 문법이 있을 때 자동으로 노에 저장돼요! 💡</p>';
+                return;
+            }
+            body.innerHTML = state.memories.map(m => `
+                <div class="memory-card">
+                    <div class="memory-card-header">
+                        <span class="memory-badge">Grammar Error Note</span>
+                        <span>${new Date(m.created_at).toLocaleDateString('ko-KR')}</span>
+                    </div>
+                    <div class="memory-original">❌ ${escapeHTML(m.original_text || '')}</div>
+                    <div class="memory-corrected">✅ ${escapeHTML(m.corrected_text || '')}</div>
+                    ${m.explanation ? `<div class="memory-explanation">💡 ${escapeHTML(m.explanation)}</div>` : ''}
+                </div>
+            `).join('');
+        }
+    } catch (e) {
+        console.error('Load memories failed:', e);
+        body.innerHTML = '<p style="text-align:center; color: red;">오답 노트를 불러오는데 실패했습니다.</p>';
+    }
 }
 
 // 메시지 로드
@@ -459,9 +649,15 @@ async function sendMessage() {
     const content = messageInput.value.trim();
     if (!content || state.isLoading) return;
     
+    // 즉시 중복 전송 차단
+    state.isLoading = true;
+    sendBtn.disabled = true;
+    
     if (!state.settings.apiKey) {
         alert('Google Gemini API 키를 설정해주세요.');
         toggleSettings();
+        state.isLoading = false;
+        sendBtn.disabled = false;
         return;
     }
     
@@ -479,10 +675,6 @@ async function sendMessage() {
     
     messageInput.value = '';
     messageInput.style.height = 'auto';
-    
-    // AI 응답 요청
-    state.isLoading = true;
-    sendBtn.disabled = true;
     showTypingIndicator();
     
     try {
@@ -503,7 +695,8 @@ async function sendMessage() {
                 difficulty: state.settings.difficulty,
                 topic: state.settings.topic,
                 roleplay_id: state.settings.roleplayId || null,
-                roleplay_args: state.settings.roleplayArgs || {}
+                roleplay_args: state.settings.roleplayArgs || {},
+                session_id: state.currentSessionId
             })
         });
         

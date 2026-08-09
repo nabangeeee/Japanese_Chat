@@ -13,19 +13,50 @@
     <div class="app">
         <!-- 헤더 -->
         <header class="header">
-            <button class="header-btn" onclick="clearChat()" title="대화 삭제">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/>
-                </svg>
+            <button class="header-btn" onclick="toggleSessionDrawer()" title="이전 대화 세션">
+                <span style="font-size: 1.2rem;">📜</span>
             </button>
             <h1 class="header-title">니혼고챗</h1>
-            <button class="header-btn" onclick="toggleSettings()" title="설정">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <circle cx="12" cy="12" r="3"/>
-                    <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z"/>
-                </svg>
-            </button>
+            <div style="display: flex; gap: 8px;">
+                <button class="header-btn" onclick="toggleMemoryModal()" title="내 오답 노트">
+                    <span style="font-size: 1.2rem;">🧠</span>
+                </button>
+                <button class="header-btn" onclick="toggleSettings()" title="설정">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="3"/>
+                        <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z"/>
+                    </svg>
+                </button>
+            </div>
         </header>
+
+        <!-- 이전 대화 사이드 드로어 -->
+        <div class="drawer-backdrop" id="drawerBackdrop" onclick="toggleSessionDrawer()"></div>
+        <div class="drawer" id="sessionDrawer">
+            <div class="drawer-header">
+                <h3>📜 대화 히스토리</h3>
+                <button class="close-btn" onclick="toggleSessionDrawer()">✕</button>
+            </div>
+            <div class="drawer-actions">
+                <button class="new-session-btn" onclick="startNewSession()">+ 새 대화 시작</button>
+            </div>
+            <div class="session-list" id="sessionList">
+                <!-- 동적 렌더링 -->
+            </div>
+        </div>
+
+        <!-- 내 오답노트 / 메모리 모달 -->
+        <div class="modal-overlay" id="memoryModalBackdrop" onclick="toggleMemoryModal()">
+            <div class="modal memory-modal" onclick="event.stopPropagation()">
+                <div class="modal-header">
+                    <h2>🧠 내 오답 노트 & 개인화 메모리</h2>
+                    <button class="close-btn" onclick="toggleMemoryModal()">✕</button>
+                </div>
+                <div class="modal-body" id="memoryListBody">
+                    <!-- 동적 렌더링 -->
+                </div>
+            </div>
+        </div>
 
         <!-- 현재 설정 표시 -->
         <div class="status-bar" id="statusBar">

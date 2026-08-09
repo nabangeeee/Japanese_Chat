@@ -13,14 +13,33 @@ from dotenv import load_dotenv
 from security_filters import redact_sensitive_output, scan_prompt_injection
 from rag_access import rag_access_configured
 from mcp_prompts import list_mcp_prompts, get_mcp_prompt_instruction
+from database import (
+    init_db, create_session, get_all_sessions, get_session, delete_session,
+    save_message, get_session_messages, save_user_memory, get_user_memories
+)
+import uuid
 
 load_dotenv()
 
 app = FastAPI(title="니혼고챗", description="일본어 학습 채팅 앱") #웹 문서 페이지 맨 위에 표시되는 문구
 
+
+@app.on_event("startup")
+def on_startup():
+    init_db()
+
+
 # 정적 파일 및 템플릿 설정
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
+
+
+class CreateSessionRequest(BaseModel):
+    title: str = "새 대화"
+    partner_name: str = "유키"
+    difficulty: str = "beginner"
+    topic: str = "free"
+    roleplay_id: str | None = None
 
 
 class ChatRequest(BaseModel):
@@ -32,6 +51,7 @@ class ChatRequest(BaseModel):
     topic: str = "free"
     roleplay_id: str | None = None
     roleplay_args: dict | None = None
+    session_id: str | None = None
 
 
 class TranslateRequest(BaseModel):
@@ -74,13 +94,21 @@ def get_system_prompt(partner_name: str, difficulty: str, topic: str, roleplay_i
         if rp_text:
             roleplay_instruction = f"\n\n[Active Roleplay Scenario (MCP Prompt)]\n{rp_text}"
     
+    memory_instruction = ""
+    memories = get_user_memories(limit=5)
+    if memories:
+        mem_lines = []
+        for m in memories:
+            mem_lines.append(f"- Correction: {m['original_text']} -> {m['corrected_text']} ({m['explanation']})")
+        memory_instruction = f"\n\n[Learner's Past Weaknesses & Memory Notes]\nThe learner previously made these mistakes. If natural, gently help them practice these grammar points:\n" + "\n".join(mem_lines)
+
     base_prompt = SYSTEM_PROMPT_TEMPLATE.format(
         partner_name=partner_name,
         difficulty_prompt=difficulty_prompt,
         topic_prompt=topic_prompt
     )
     
-    return base_prompt + roleplay_instruction
+    return base_prompt + roleplay_instruction + memory_instruction
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -107,6 +135,54 @@ async def mcp_prompts_get(req: MCPGetPromptRequest):
     if not instruction:
         raise HTTPException(status_code=440, detail="요청한 MCP Prompt를 찾을 수 없습니다.")
     return {"prompt_id": req.id, "instruction": instruction}
+
+
+# --- Sessions & Memories APIs ---
+
+@app.get("/api/sessions")
+async def list_sessions():
+    """저장된 전체 대화 세션 목록 반환"""
+    return {"sessions": get_all_sessions()}
+
+
+@app.post("/api/sessions")
+async def api_create_session(req: CreateSessionRequest):
+    """새 대화 세션 생성"""
+    sess_id = str(uuid.uuid4())
+    session_data = create_session(
+        session_id=sess_id,
+        title=req.title,
+        partner_name=req.partner_name,
+        difficulty=req.difficulty,
+        topic=req.topic,
+        roleplay_id=req.roleplay_id
+    )
+    return {"session": session_data}
+
+
+@app.get("/api/sessions/{session_id}")
+async def get_session_detail(session_id: str):
+    """특정 세션 정보 및 메시지 이력 반환"""
+    session = get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다.")
+    messages = get_session_messages(session_id)
+    return {"session": session, "messages": messages}
+
+
+@app.delete("/api/sessions/{session_id}")
+async def api_delete_session(session_id: str):
+    """특정 세션 삭제"""
+    deleted = delete_session(session_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="삭제할 세션을 찾을 수 없습니다.")
+    return {"status": "deleted", "session_id": session_id}
+
+
+@app.get("/api/memories")
+async def api_list_memories():
+    """학습자의 오답 노트 및 개인화 메모리 목록 반환"""
+    return {"memories": get_user_memories(limit=30)}
 
 
 # 구글 웹 검색 RAG 트리거 전용 키워드 (기본값 OFF, 명확한 뉴스/유행/트렌드 키워드에서만 켜짐)
@@ -194,7 +270,16 @@ async def chat(req: ChatRequest):
         elapsed = time.time() - start_t
         print(f"[Chat API END] Completed in {elapsed:.2f} seconds.")
         raw = response.text or ""
-        return {"response": redact_sensitive_output(raw)}
+        clean_res = redact_sensitive_output(raw)
+        
+        # 세션 ID가 제공되었다면 유저 메시지 및 AI 답장 DB 저장
+        if req.session_id:
+            user_msg_id = f"usr_{int(time.time() * 1000)}"
+            assistant_msg_id = f"ast_{int(time.time() * 1000) + 1}"
+            save_message(user_msg_id, req.session_id, "user", req.message)
+            save_message(assistant_msg_id, req.session_id, "assistant", clean_res)
+
+        return {"response": clean_res}
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -274,27 +359,27 @@ async def furigana(req: TranslateRequest):
 BEGINNER_PROMPT = """
 # Difficulty: Beginner
 # Persona: You are a Japanese friend of a Korean person learning Japanese. Please speak in easy Japanese at a kindergarten level.
-- Use mainly hiragana and katakana
-- Use simple words and short sentences. Keep responses to 1-2 sentences.
-- Use polite form (です・ます form)
+- Use simple words and short sentences (1-2 sentences).
+- Use polite form (です・ます form).
+- Use basic kanji and hiragana.
 """
 
 INTERMEDIATE_PROMPT = """
 # Difficulty: Intermediate
 # Persona: You are a Japanese friend of a Korean person learning Japanese. Please speak in natural Japanese at a middle school level.
-- Use kanji moderately (include readings)
-- Use everyday conversational expressions
-- Use polite and casual speech appropriately depending on the situation
-- If there are grammar mistakes, naturally guide them to the correct expression
-- Avoid long responses, keep it to 2-3 sentences"""
+- Use everyday conversational expressions (2-3 sentences).
+- Use common kanji appropriately.
+- Use polite and casual speech depending on the context.
+- Gently guide grammar mistakes to natural expressions.
+"""
 
 ADVANCED_PROMPT = """
 # Difficulty: Advanced
-# Persona: You are a Japanese friend of a Korean person learning Japanese. Please speak in natural and sophisticated Japanese at a high school level.
-- Use native-level expressions
-- Use idioms and slang appropriately
-- Include business Japanese and honorific expressions
-- Suggest more natural expressions when available"""
+# Persona: You are a Japanese friend of a Korean person learning Japanese. Please speak in natural and sophisticated Japanese at a high school/adult level.
+- Use native-level expressions, idioms, and slang.
+- Include business expressions and honorifics (敬語) when appropriate.
+- Suggest subtle natural nuances.
+"""
 
 DIFFICULTY_PROMPTS = {
     "beginner": BEGINNER_PROMPT,
@@ -323,6 +408,10 @@ SYSTEM_PROMPT_TEMPLATE = """Your name is "{partner_name}". You are a Japanese pe
 
 Conversation Topic: {topic_prompt}
 
+CRITICAL FORMATTING RULE:
+- NEVER include bracketed furigana/readings like 過ご(すご)す or 今日(きょう) in your main conversation response!
+- Output ONLY clean, natural Japanese text without any parenthetical readings.
+
 Important Rules:
 - Have a natural conversation like a friend with a Korean Japanese learner
 - Occasionally ask questions to keep the conversation going
@@ -341,9 +430,10 @@ TRANSLATE_PROMPT = """주어진 일본어 문장을 자연스러운 한국어로
 # --------------------------------------------------------------------------------------
 
 # Furigana Prompt
-FURIGANA_PROMPT = """주어진 일본어 문장의 한자 뒤에 괄호로 히라가나 읽는 법(후리가나)을 달아주세요.
+FURIGANA_PROMPT = """주어진 일본어 문장의 한자 뒤에 괄호로 히라가나 읽는 법(후리가나)을 표기하세요.
 중요 지침:
-- 영어 설명, 부연 해설, 서식 표식 없이 오직 후리가나가 표시된 일본어 문장만 그대로 출력하세요.
+- 영문 문법 설명, 영어 주석, 용법 비교 코멘트("is acceptable", "usually" 등), 피드백 표기를 절대로 출력하지 마세요!
+- 오직 올바른 후리가나가 달린 일본어 문장 결과만 그대로 출력하세요.
 - 형식: 한자(히라가나)
 - 예: 今日(きょう)は天気(てんき)がいいですね。"""
 
