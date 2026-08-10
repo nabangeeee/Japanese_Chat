@@ -200,6 +200,8 @@ function saveSettings() {
     const prevTopic = state.settings.topic;
     const prevRoleplayId = state.settings.roleplayId;
     
+    const prevRoleplayArgs = state.settings.roleplayArgs;
+    
     // 새 설정 가져오기 (모달 내의 버튼 및 input에서)
     const activeSegment = document.querySelector('#settingsModal .segment.active');
     const activeTopic = document.querySelector('#settingsModal .topic-btn.active');
@@ -230,8 +232,13 @@ function saveSettings() {
     // localStorage에 저장
     localStorage.setItem('nihongoSettings', JSON.stringify(state.settings));
     
-    // 난이도, 주제, 롤플레잉이 바뀌면 이전 세션은 DB에 안전 보존하고 새로운 세션 생성
-    const settingsChanged = (prevDifficulty !== newDifficulty || prevTopic !== newTopic || prevRoleplayId !== state.settings.roleplayId);
+    // 난이도, 주제, 롤플레잉 시나리오/옵션이 바뀌면 이전 세션은 DB에 보존하고 롤플레잉 새 대화 세션 자동 생성
+    const settingsChanged = (
+        prevDifficulty !== newDifficulty ||
+        prevTopic !== newTopic ||
+        prevRoleplayId !== state.settings.roleplayId ||
+        JSON.stringify(prevRoleplayArgs) !== JSON.stringify(roleplayArgs)
+    );
     
     if (settingsChanged) {
         startNewSession(false);
@@ -254,12 +261,15 @@ async function initSessionSystem() {
         if (res.ok) {
             const data = await res.json();
             state.sessions = data.sessions || [];
-            
-            if (state.sessions.length > 0) {
-                await switchSession(state.sessions[0].session_id, false);
-            } else {
-                await startNewSession(false);
-            }
+        }
+        
+        // 브라우저 탭 세션(sessionStorage)을 활용한 새로고침 vs 첫 접속 구분
+        const lastActiveSessionId = sessionStorage.getItem('nihongoActiveSessionId');
+        
+        if (lastActiveSessionId && state.sessions.some(s => s.session_id === lastActiveSessionId)) {
+            await switchSession(lastActiveSessionId, false);
+        } else {
+            await startNewSession(false);
         }
     } catch (e) {
         console.error('Session init failed:', e);
@@ -269,7 +279,14 @@ async function initSessionSystem() {
 
 async function startNewSession(closeDrawer = true) {
     try {
-        const title = `${TOPIC_NAMES[state.settings.topic] || '자유 대화'} (${DIFFICULTY_NAMES[state.settings.difficulty] || '초급'})`;
+        let title = `${TOPIC_NAMES[state.settings.topic] || '자유 대화'} (${DIFFICULTY_NAMES[state.settings.difficulty] || '초급'})`;
+        if (state.settings.roleplayId) {
+            const rp = mcpPrompts.find(p => p.id === state.settings.roleplayId);
+            if (rp) {
+                title = `🎭 ${rp.name} (${DIFFICULTY_NAMES[state.settings.difficulty] || '초급'})`;
+            }
+        }
+        
         const res = await fetch('/api/sessions', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -286,6 +303,7 @@ async function startNewSession(closeDrawer = true) {
             const newSess = data.session;
             state.sessions.unshift(newSess);
             state.currentSessionId = newSess.session_id;
+            sessionStorage.setItem('nihongoActiveSessionId', newSess.session_id);
             state.messages = [];
             
             addWelcomeMessage();
@@ -303,6 +321,7 @@ async function switchSession(sessionId, closeDrawer = true) {
         if (res.ok) {
             const data = await res.json();
             state.currentSessionId = sessionId;
+            sessionStorage.setItem('nihongoActiveSessionId', sessionId);
             state.messages = data.messages || [];
             
             // 세션에 저장된 메시지가 없으면 웰컴 메시지 추가
@@ -405,34 +424,112 @@ async function toggleMemoryModal() {
     }
 }
 
+let currentMemoryTab = 'errors';
+
+function switchMemoryTab(tabName) {
+    currentMemoryTab = tabName;
+    const btnErrors = document.getElementById('tabErrorsBtn');
+    const btnFacts = document.getElementById('tabFactsBtn');
+    
+    if (tabName === 'errors') {
+        if (btnErrors) btnErrors.classList.add('active');
+        if (btnFacts) btnFacts.classList.remove('active');
+    } else {
+        if (btnFacts) btnFacts.classList.add('active');
+        if (btnErrors) btnErrors.classList.remove('active');
+    }
+    loadAndRenderMemories();
+}
+
 async function loadAndRenderMemories() {
     const body = document.getElementById('memoryListBody');
     if (!body) return;
     body.innerHTML = '<p style="text-align:center; color: var(--text-muted); padding: 20px;">로딩 중...</p>';
-    try {
-        const res = await fetch('/api/memories');
-        if (res.ok) {
-            const data = await res.json();
-            state.memories = data.memories || [];
-            if (state.memories.length === 0) {
-                body.innerHTML = '<p style="text-align:center; color: var(--text-muted); padding: 20px; line-height: 1.6;">아직 축적된 오답 노어가 없습니다.<br>AI와 일본어로 회화하면서 틀린 문법이 있을 때 자동으로 노에 저장돼요! 💡</p>';
-                return;
-            }
-            body.innerHTML = state.memories.map(m => `
-                <div class="memory-card">
-                    <div class="memory-card-header">
-                        <span class="memory-badge">Grammar Error Note</span>
-                        <span>${new Date(m.created_at).toLocaleDateString('ko-KR')}</span>
+    
+    if (currentMemoryTab === 'errors') {
+        try {
+            const res = await fetch('/api/memories');
+            if (res.ok) {
+                const data = await res.json();
+                state.memories = data.memories || [];
+                if (state.memories.length === 0) {
+                    body.innerHTML = '<p style="text-align:center; color: var(--text-muted); padding: 20px; line-height: 1.6;">아직 축적된 오답 노어가 없습니다.<br>AI와 일본어로 회화하면서 틀린 문법이 있을 때 자동으로 노에 저장돼요! 💡</p>';
+                    return;
+                }
+                body.innerHTML = state.memories.map(m => `
+                    <div class="memory-card">
+                        <div class="memory-card-header">
+                            <span class="memory-badge">Grammar Error Note</span>
+                            <span>${new Date(m.created_at).toLocaleDateString('ko-KR')}</span>
+                        </div>
+                        <div class="memory-original">❌ ${escapeHTML(m.original_text || '')}</div>
+                        <div class="memory-corrected">✅ ${escapeHTML(m.corrected_text || '')}</div>
+                        ${m.explanation ? `<div class="memory-explanation">💡 ${escapeHTML(m.explanation)}</div>` : ''}
                     </div>
-                    <div class="memory-original">❌ ${escapeHTML(m.original_text || '')}</div>
-                    <div class="memory-corrected">✅ ${escapeHTML(m.corrected_text || '')}</div>
-                    ${m.explanation ? `<div class="memory-explanation">💡 ${escapeHTML(m.explanation)}</div>` : ''}
-                </div>
-            `).join('');
+                `).join('');
+            }
+        } catch (e) {
+            console.error('Load memories failed:', e);
+            body.innerHTML = '<p style="text-align:center; color: red;">오답 노트를 불러오는데 실패했습니다.</p>';
         }
-    } catch (e) {
-        console.error('Load memories failed:', e);
-        body.innerHTML = '<p style="text-align:center; color: red;">오답 노트를 불러오는데 실패했습니다.</p>';
+    } else {
+        // 장기 기억 프로필 탭
+        try {
+            const res = await fetch('/api/facts');
+            if (res.ok) {
+                const data = await res.json();
+                const facts = data.facts || [];
+                const summaries = data.summaries || [];
+                
+                if (facts.length === 0 && summaries.length === 0) {
+                    body.innerHTML = `
+                        <div class="memory-card" style="border-left-color: #27ae60;">
+                            <div class="memory-card-header">
+                                <span class="memory-badge" style="background: #e8f8f5; color: #27ae60;">AI Agent Long-Term Memory</span>
+                            </div>
+                            <div class="memory-corrected" style="color: #2c3e50;">📌 대화 맥락 & 취향 자동 요약 대기 중</div>
+                            <div class="memory-explanation" style="line-height: 1.6;">
+                                대화가 6건 이상 진행되면 백그라운드 AI가 대화 내용을 분석하여 100% 한국어로 2~3줄 요약문과 학습자 프로필 카드를 여기에 실시간 적재합니다! 🧠
+                            </div>
+                        </div>
+                    `;
+                    return;
+                }
+                
+                let html = '';
+                
+                if (facts.length > 0) {
+                    html += facts.map(f => `
+                        <div class="memory-card" style="border-left-color: #3498db;">
+                            <div class="memory-card-header">
+                                <span class="memory-badge" style="background: #ebf5fb; color: #2980b9;">Learner Fact</span>
+                                <span>${new Date(f.updated_at).toLocaleDateString('ko-KR')}</span>
+                            </div>
+                            <div class="memory-corrected" style="color: #2c3e50;">💡 ${escapeHTML(f.fact_key || '')}</div>
+                            <div class="memory-explanation">${escapeHTML(f.fact_value || '')}</div>
+                        </div>
+                    `).join('');
+                }
+                
+                if (summaries.length > 0) {
+                    html += summaries.map(s => `
+                        <div class="memory-card" style="border-left-color: #27ae60;">
+                            <div class="memory-card-header">
+                                <span class="memory-badge" style="background: #e8f8f5; color: #27ae60;">Session Summary</span>
+                                <span>${new Date(s.updated_at).toLocaleDateString('ko-KR')}</span>
+                            </div>
+                            <div class="memory-corrected" style="color: #2c3e50;">📜 ${escapeHTML(s.title || '대화 세션 요약')}</div>
+                            <div class="memory-explanation" style="line-height: 1.5;">${escapeHTML(s.summary || '')}</div>
+                        </div>
+                    `).join('');
+                }
+                
+                body.innerHTML = html;
+            }
+        } catch (e) {
+            console.error('Load facts failed:', e);
+            body.innerHTML = '<p style="text-align:center; color: red;">장기 기억 프로필을 불러오는데 실패했습니다.</p>';
+        }
     }
 }
 
@@ -675,6 +772,11 @@ async function sendMessage() {
     
     messageInput.value = '';
     messageInput.style.height = 'auto';
+    setTimeout(() => {
+        messageInput.value = '';
+        messageInput.style.height = 'auto';
+    }, 0);
+    
     showTypingIndicator();
     
     try {
@@ -728,9 +830,10 @@ async function sendMessage() {
     }
 }
 
-// 엔터 키 처리
+// 엔터 키 처리 (한글/일본어 IME 글자 조합 중복 입력 방지)
 function handleKeyDown(event) {
     if (event.key === 'Enter' && !event.shiftKey) {
+        if (event.isComposing) return;
         event.preventDefault();
         sendMessage();
     }

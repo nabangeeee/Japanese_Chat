@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse
@@ -15,7 +15,8 @@ from rag_access import rag_access_configured
 from mcp_prompts import list_mcp_prompts, get_mcp_prompt_instruction
 from database import (
     init_db, create_session, get_all_sessions, get_session, delete_session,
-    save_message, get_session_messages, save_user_memory, get_user_memories
+    save_message, get_session_messages, save_user_memory, get_user_memories,
+    save_session_summary, get_session_summary, save_user_fact, get_all_user_facts
 )
 import uuid
 
@@ -84,7 +85,7 @@ def _scan_history_for_injection(history: list) -> None:
             _assert_no_prompt_injection(content)
 
 
-def get_system_prompt(partner_name: str, difficulty: str, topic: str, roleplay_id: str | None = None, roleplay_args: dict | None = None) -> str:
+def get_system_prompt(partner_name: str, difficulty: str, topic: str, roleplay_id: str | None = None, roleplay_args: dict | None = None, session_id: str | None = None) -> str:
     difficulty_prompt = DIFFICULTY_PROMPTS.get(difficulty, DIFFICULTY_PROMPTS["beginner"])
     topic_prompt = TOPIC_PROMPTS.get(topic, TOPIC_PROMPTS["free"])
     
@@ -102,13 +103,115 @@ def get_system_prompt(partner_name: str, difficulty: str, topic: str, roleplay_i
             mem_lines.append(f"- Correction: {m['original_text']} -> {m['corrected_text']} ({m['explanation']})")
         memory_instruction = f"\n\n[Learner's Past Weaknesses & Memory Notes]\nThe learner previously made these mistakes. If natural, gently help them practice these grammar points:\n" + "\n".join(mem_lines)
 
+    # 장기 메모리 요약본 및 유저 프로필 팩트 동적 주입
+    long_term_instruction = ""
+    if session_id:
+        sess_summary = get_session_summary(session_id)
+        facts = get_all_user_facts()
+        
+        lt_parts = []
+        if sess_summary:
+            lt_parts.append(f"Session Context Summary: {sess_summary}")
+        if facts:
+            fact_str = ", ".join([f"{f['fact_key']}={f['fact_value']}" for f in facts])
+            lt_parts.append(f"Known Learner Profile/Facts: {fact_str}")
+            
+        if lt_parts:
+            long_term_instruction = f"\n\n[Long-term Memory & Learner Context]\n" + "\n".join(lt_parts)
+
     base_prompt = SYSTEM_PROMPT_TEMPLATE.format(
         partner_name=partner_name,
         difficulty_prompt=difficulty_prompt,
         topic_prompt=topic_prompt
     )
     
-    return base_prompt + roleplay_instruction + memory_instruction
+    return base_prompt + roleplay_instruction + memory_instruction + long_term_instruction
+
+
+def _update_session_summary_background(api_key: str, session_id: str):
+    """백그라운드에서 세션 대화 내역이 6건 이상일 때 대화 요약문 및 유저 팩트를 자동 추출하여 DB에 적재"""
+    try:
+        messages = get_session_messages(session_id)
+        if len(messages) < 6:
+            return
+
+        dialogue_text = "\n".join([f"{m['role']}: {m['content']}" for m in messages[-14:]])
+        
+        client = genai.Client(api_key=api_key)
+        prompt = f"""다음 대화 내용을 바탕으로 100% 자연스러운 한국어로만 핵심 요약본을 작성하세요.
+중요 지침:
+- 일본어나 영어를 섞지 말고 오직 깔끔한 한국어로만 작성하세요.
+
+Format:
+SUMMARY: (대화의 핵심 주제 및 학습자의 언급 사항을 한국어로 2문장으로 요약)
+FACTS: (상대방 학습자에 대해 알게 된 정보가 있다면 key=value 형식으로 작성, 없으면 NONE)
+
+대화 내용:
+{dialogue_text}"""
+
+        res = client.models.generate_content(
+            model="gemini-3.5-flash",
+            contents=prompt,
+            config=types.GenerateContentConfig(temperature=0.2, max_output_tokens=300)
+        )
+        
+        out = res.text or ""
+        summary = ""
+        for line in out.split("\n"):
+            if line.startswith("SUMMARY:"):
+                summary = line.replace("SUMMARY:", "").strip()
+            elif line.startswith("FACTS:") and "NONE" not in line:
+                fact_part = line.replace("FACTS:", "").strip()
+                if "=" in fact_part:
+                    k, v = fact_part.split("=", 1)
+                    save_user_fact(k.strip(), v.strip())
+                    
+        if summary:
+            save_session_summary(session_id, summary)
+            print(f"[Long-Term Memory] Updated summary for session '{session_id}': {summary[:40]}...")
+    except Exception as e:
+        print(f"[Long-Term Memory Error] {e}")
+
+
+def _extract_grammar_errors_background(api_key: str, user_text: str, ai_text: str):
+    """사용자 메시지와 AI 답장을 비교하여 문법 실수가 있다면 오답 노트 DB에 자동 적재"""
+    try:
+        client = genai.Client(api_key=api_key)
+        prompt = f"""다음 일본어 대화에서 사용자의 문법/어휘 실수를 AI가 교정해 준 경우 오답 노트 항목을 작성하세요.
+실수가 없다면 NONE을 출력하세요.
+
+Format (실수가 있을 때만):
+ORIGINAL: (사용자가 실수한 틀린 문장)
+CORRECTED: (올바른 정답 일본어 문장)
+EXPLANATION: (한국어로 1문장 쉬운 문법 교정 설명)
+
+사용자: {user_text}
+AI 답장: {ai_text}"""
+
+        res = client.models.generate_content(
+            model="gemini-3.5-flash",
+            contents=prompt,
+            config=types.GenerateContentConfig(temperature=0.1, max_output_tokens=250)
+        )
+        
+        out = res.text or ""
+        if "NONE" in out or "ORIGINAL:" not in out:
+            return
+
+        orig, corr, expl = "", "", ""
+        for line in out.split("\n"):
+            if line.startswith("ORIGINAL:"):
+                orig = line.replace("ORIGINAL:", "").strip()
+            elif line.startswith("CORRECTED:"):
+                corr = line.replace("CORRECTED:", "").strip()
+            elif line.startswith("EXPLANATION:"):
+                expl = line.replace("EXPLANATION:", "").strip()
+
+        if orig and corr:
+            save_user_memory("Grammar Error", orig, corr, expl)
+            print(f"[Error Note Memory] Automatically saved error note: '{orig}' -> '{corr}'")
+    except Exception as e:
+        print(f"[Error Note Memory Error] {e}")
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -185,6 +288,24 @@ async def api_list_memories():
     return {"memories": get_user_memories(limit=30)}
 
 
+@app.get("/api/facts")
+async def api_list_facts():
+    """학습자 장기 기억 프로필 (유저 팩트 및 세션 요약) 목록 반환"""
+    facts = get_all_user_facts()
+    sessions = get_all_sessions()
+    summaries = []
+    for s in sessions:
+        sum_text = get_session_summary(s["session_id"])
+        if sum_text:
+            summaries.append({
+                "session_id": s["session_id"],
+                "title": s["title"],
+                "summary": sum_text,
+                "updated_at": s["updated_at"]
+            })
+    return {"facts": facts, "summaries": summaries}
+
+
 # 구글 웹 검색 RAG 트리거 전용 키워드 (기본값 OFF, 명확한 뉴스/유행/트렌드 키워드에서만 켜짐)
 STRICT_SEARCH_KEYWORDS = [
     "뉴스", "유행", "트렌드", "실시간", "구글 검색", "웹 검색", "핫이슈",
@@ -199,7 +320,7 @@ def _needs_web_search(message: str) -> bool:
 
 @app.post("/api/chat")
 @traceable(name="gemini_chat")
-async def chat(req: ChatRequest):
+async def chat(req: ChatRequest, bg_tasks: BackgroundTasks):
     if not req.api_key:
         raise HTTPException(status_code=400, detail="API 키가 필요합니다.")
 
@@ -214,7 +335,8 @@ async def chat(req: ChatRequest):
             req.difficulty, 
             req.topic, 
             req.roleplay_id, 
-            req.roleplay_args
+            req.roleplay_args,
+            req.session_id
         )
         
         contents = []
@@ -278,6 +400,9 @@ async def chat(req: ChatRequest):
             assistant_msg_id = f"ast_{int(time.time() * 1000) + 1}"
             save_message(user_msg_id, req.session_id, "user", req.message)
             save_message(assistant_msg_id, req.session_id, "assistant", clean_res)
+            # 백그라운드 대화 요약 & 오답 노트 파싱 태스크 등록
+            bg_tasks.add_task(_update_session_summary_background, req.api_key, req.session_id)
+            bg_tasks.add_task(_extract_grammar_errors_background, req.api_key, req.message, clean_res)
 
         return {"response": clean_res}
     

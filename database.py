@@ -60,6 +60,26 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+
+        # Session Summaries table (Long-term Memory)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS session_summaries (
+                session_id TEXT PRIMARY KEY,
+                summary_text TEXT NOT NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (session_id) REFERENCES sessions (session_id) ON DELETE CASCADE
+            )
+        """)
+
+        # User Facts table (Learner Profile Fact Memory)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_facts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                fact_key TEXT UNIQUE,
+                fact_value TEXT NOT NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         conn.commit()
 
 
@@ -185,5 +205,51 @@ def get_user_memories(limit: int = 20) -> List[Dict[str, Any]]:
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM user_memories ORDER BY created_at DESC LIMIT ?", (limit,))
+        rows = cursor.fetchall()
+        return [dict(row) for row in rows]
+
+
+# --- Long-Term Memory Summary & User Fact Operations ---
+
+def save_session_summary(session_id: str, summary_text: str):
+    now = datetime.now().isoformat()
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT OR REPLACE INTO session_summaries (session_id, summary_text, updated_at)
+            VALUES (?, ?, ?)
+            """,
+            (session_id, summary_text, now)
+        )
+        conn.commit()
+
+
+def get_session_summary(session_id: str) -> Optional[str]:
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT summary_text FROM session_summaries WHERE session_id = ?", (session_id,))
+        row = cursor.fetchone()
+        return row["summary_text"] if row else None
+
+
+def save_user_fact(fact_key: str, fact_value: str):
+    now = datetime.now().isoformat()
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT OR REPLACE INTO user_facts (fact_key, fact_value, updated_at)
+            VALUES (?, ?, ?)
+            """,
+            (fact_key, fact_value, now)
+        )
+        conn.commit()
+
+
+def get_all_user_facts() -> List[Dict[str, Any]]:
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM user_facts ORDER BY updated_at DESC")
         rows = cursor.fetchall()
         return [dict(row) for row in rows]

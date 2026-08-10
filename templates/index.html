@@ -19,7 +19,7 @@
             <h1 class="header-title">니혼고챗</h1>
             <div style="display: flex; gap: 8px;">
                 <button class="header-btn" onclick="toggleMemoryModal()" title="내 오답 노트">
-                    <span style="font-size: 1.2rem;">🧠</span>
+                    <span style="font-size: 1.2rem;">🐱</span>
                 </button>
                 <button class="header-btn" onclick="toggleSettings()" title="설정">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -49,8 +49,12 @@
         <div class="modal-overlay" id="memoryModalBackdrop" onclick="toggleMemoryModal()">
             <div class="modal memory-modal" onclick="event.stopPropagation()">
                 <div class="modal-header">
-                    <h2>🧠 내 오답 노트 & 개인화 메모리</h2>
+                    <h2>🐱 에이전트 메모리 & 오답 노트</h2>
                     <button class="close-btn" onclick="toggleMemoryModal()">✕</button>
+                </div>
+                <div class="memory-tabs">
+                    <button class="memory-tab active" id="tabErrorsBtn" onclick="switchMemoryTab('errors')">✏️ 오답 노트</button>
+                    <button class="memory-tab" id="tabFactsBtn" onclick="switchMemoryTab('facts')">📌 장기 기억 프로필</button>
                 </div>
                 <div class="modal-body" id="memoryListBody">
                     <!-- 동적 렌더링 -->
