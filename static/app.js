@@ -551,16 +551,37 @@ function saveMessages() {
 
 // 환영 메시지 추가
 function addWelcomeMessage() {
-    const welcomeMessages = [
-        `こんにちは！私は${state.settings.partnerName}です。日本語の練習、一緒に頑張りましょう！😊`,
-        `やあ！${state.settings.partnerName}だよ。今日は何を話そうか？🌸`,
-        `はじめまして！${state.settings.partnerName}です。気軽に話しかけてね！✨`
-    ];
+    let content = '';
+    
+    // 롤플레잉 모드일 경우 해당 MCP 시나리오의 맞춤형 웰컴 문구 사용
+    if (state.settings.roleplayId && mcpPrompts.length > 0) {
+        const rp = mcpPrompts.find(p => p.id === state.settings.roleplayId);
+        if (rp && rp.welcome_message) {
+            content = rp.welcome_message;
+            // 템플릿 인자 치환 (예: {place}, {hotel_name} 등)
+            if (rp.arguments && rp.arguments.length > 0) {
+                rp.arguments.forEach(arg => {
+                    const val = state.settings.roleplayArgs[arg.name] || arg.default || '';
+                    content = content.replaceAll(`{${arg.name}}`, val);
+                });
+            }
+        }
+    }
+    
+    // 일반 대화 모드이거나 맞춤 문구가 없을 때 기본 웰컴 인사말 사용
+    if (!content) {
+        const welcomeMessages = [
+            `こんにちは！私は${state.settings.partnerName}です。日本語の練習、一緒に頑張りましょう！😊`,
+            `やあ！${state.settings.partnerName}だよ。今日は何を話そうか？🌸`,
+            `はじめまして！${state.settings.partnerName}です。気軽に話しかけてね！✨`
+        ];
+        content = welcomeMessages[Math.floor(Math.random() * welcomeMessages.length)];
+    }
     
     const message = {
         id: Date.now().toString(),
         role: 'assistant',
-        content: welcomeMessages[Math.floor(Math.random() * welcomeMessages.length)],
+        content: content,
         timestamp: new Date().toISOString()
     };
     

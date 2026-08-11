@@ -22,6 +22,7 @@ class MCPPrompt(BaseModel):
     category: str
     arguments: List[MCPPromptArgument] = []
     system_instruction: str
+    welcome_message: Optional[str] = None
 
 
 # MCP Prompts Registry
@@ -35,6 +36,7 @@ ROLEPLAY_PROMPTS: Dict[str, MCPPrompt] = {
             MCPPromptArgument(name="place", description="카페 장소", required=False, default="도쿄 인근의 감성 카페"),
             MCPPromptArgument(name="item_recommend", description="추천 메뉴", required=False, default="계절 한정 앙버터 라떼 및 드립 커피")
         ],
+        welcome_message="いらっしゃいませ！☕️ ご注文はお決まりですか？店内でお召し上がりですか、それともお持ち帰りですか？", #어서 오세요! ☕️ 주문은 결정하셨나요? 매장에서 드시나요, 포장이신가요?
         system_instruction="""[MCP Roleplay Scenario: Cafe Staff]
 Role: You are a polite and friendly Japanese barista at a cafe in {place}.
 Context & Behavior:
@@ -51,6 +53,7 @@ Context & Behavior:
         arguments=[
             MCPPromptArgument(name="airline", description="항공사 및 카운터", required=False, default="하네다 공항 JAL 카운터")
         ],
+        welcome_message="いらっしゃいませ。航空券とパスポートをお預かりいたします。本日お預けになる手荷物はございますか？", #어서 오세요. 항공권과 여권을 확인하겠습니다. 오늘 부치실 위탁 수하물이 있으신가요?
         system_instruction="""[MCP Roleplay Scenario: Airport Staff]
 Role: You are a professional airline ground staff at {airline}.
 Context & Behavior:
@@ -64,6 +67,7 @@ Context & Behavior:
         description="일본 편의점(편의점 알바) 특유의 빠른 응대, 봉투 필요 여부, 데우기(아타타메) 대화.",
         category="일상/실전",
         arguments=[],
+        welcome_message="いらっしゃいませ！お会計こちらへどうぞ。温めるお弁当はございますか？", # 어서 오세요! 계산 이쪽으로 부탁드립니다. 데우실 도시락이 있으신가요?
         system_instruction="""[MCP Roleplay Scenario: Convenience Store Clerk]
 Role: You are a helpful Japanese convenience store clerk (コンビニの店員).
 Context & Behavior:
@@ -79,6 +83,7 @@ Context & Behavior:
         arguments=[
             MCPPromptArgument(name="hotel_name", description="호텔 이름", required=False, default="도쿄 료칸 & 호텔")
         ],
+        welcome_message="いらっしゃいませ。ご宿泊でございますね。ご予約のお名前をお伺いしてもよろしいでしょうか？", # 어서 오세요. 숙박이시군요. 예약하신 성함을 여쭤봐도 될까요?
         system_instruction="""[MCP Roleplay Scenario: Hotel Receptionist]
 Role: You are a refined receptionist at {hotel_name}.
 Context & Behavior:
@@ -92,6 +97,7 @@ Context & Behavior:
         description="친절한 일본 택시 기사님과의 대화. 목적지 설명, 소요 시간, 결제 방식 이야기.",
         category="여행/실전",
         arguments=[],
+        welcome_message="ご乗車ありがとうございます！本日はどちらまで向かわれますか？", # 탑승 감사드립니다! 오늘은 어디까지 향하시나요?
         system_instruction="""[MCP Roleplay Scenario: Taxi Driver]
 Role: You are a friendly, experienced Japanese taxi driver (タクシーの運転手).
 Context & Behavior:
@@ -112,6 +118,7 @@ Context & Behavior:
                 default="tsundere"
             )
         ],
+        welcome_message="ふん！べ、別にあなたを待ってたわけじゃないんだからね！今日は何して遊ぶの？", # 흥! 딱, 딱히 널 기다린 건 아니거든! 오늘은 뭐 하고 놀 거야?
         system_instruction="""[MCP Roleplay Scenario: Anime Character ({archetype})]
 Role: You are a vivid anime character in a Japanese animation.
 Archetype Style ({archetype}):
@@ -133,6 +140,7 @@ def list_mcp_prompts() -> List[Dict[str, Any]]:
             "name": prompt.name,
             "description": prompt.description,
             "category": prompt.category,
+            "welcome_message": prompt.welcome_message,
             "arguments": [arg.model_dump() for arg in prompt.arguments]
         })
     return prompts
@@ -146,7 +154,6 @@ def get_mcp_prompt_instruction(prompt_id: str, arguments: Optional[Dict[str, str
     prompt = ROLEPLAY_PROMPTS[prompt_id]
     args = arguments or {}
     
-    # Fill in default values if not provided
     formatted_args = {}
     for arg in prompt.arguments:
         val = args.get(arg.name)
@@ -158,5 +165,30 @@ def get_mcp_prompt_instruction(prompt_id: str, arguments: Optional[Dict[str, str
         rendered = prompt.system_instruction.format(**formatted_args)
     except KeyError:
         rendered = prompt.system_instruction
+        
+    return rendered
+
+
+def get_mcp_prompt_welcome_message(prompt_id: str, arguments: Optional[Dict[str, str]] = None) -> Optional[str]:
+    """Retrieve rendered welcome message for a given prompt_id and arguments."""
+    if prompt_id not in ROLEPLAY_PROMPTS:
+        return None
+    
+    prompt = ROLEPLAY_PROMPTS[prompt_id]
+    if not prompt.welcome_message:
+        return None
+
+    args = arguments or {}
+    formatted_args = {}
+    for arg in prompt.arguments:
+        val = args.get(arg.name)
+        if not val or not str(val).strip():
+            val = arg.default or ""
+        formatted_args[arg.name] = str(val).strip()
+        
+    try:
+        rendered = prompt.welcome_message.format(**formatted_args)
+    except KeyError:
+        rendered = prompt.welcome_message
         
     return rendered
