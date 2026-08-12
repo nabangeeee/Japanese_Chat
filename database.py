@@ -80,6 +80,18 @@ def init_db():
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+
+        # OpenClaw Real-Time Live Trends table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS live_trends (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                category TEXT NOT NULL,
+                title TEXT NOT NULL,
+                content TEXT,
+                url TEXT,
+                fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         conn.commit()
 
 
@@ -251,5 +263,38 @@ def get_all_user_facts() -> List[Dict[str, Any]]:
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM user_facts ORDER BY updated_at DESC")
+        rows = cursor.fetchall()
+        return [dict(row) for row in rows]
+
+
+# --- OpenClaw Live Trends Operations ---
+
+def save_live_trend(category: str, title: str, content: Optional[str] = None, url: Optional[str] = None) -> Dict[str, Any]:
+    now = datetime.now().isoformat()
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO live_trends (category, title, content, url, fetched_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (category, title, content, url, now)
+        )
+        conn.commit()
+        trend_id = cursor.lastrowid
+    return {
+        "id": trend_id,
+        "category": category,
+        "title": title,
+        "content": content,
+        "url": url,
+        "fetched_at": now
+    }
+
+
+def get_recent_live_trends(limit: int = 10) -> List[Dict[str, Any]]:
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM live_trends ORDER BY fetched_at DESC LIMIT ?", (limit,))
         rows = cursor.fetchall()
         return [dict(row) for row in rows]
