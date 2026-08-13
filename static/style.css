@@ -941,4 +941,43 @@ input:checked + .slider:before {
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08);
 }
 
+/* Feedback Bar Styles */
+.message-footer-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-top: 4px;
+}
+
+.feedback-bar {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.feedback-btn {
+    background: rgba(0, 0, 0, 0.04);
+    border: 1px solid rgba(0, 0, 0, 0.06);
+    border-radius: 12px;
+    padding: 2px 8px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    opacity: 0.6;
+}
+
+.feedback-btn:hover {
+    opacity: 1;
+    background: rgba(0, 0, 0, 0.08);
+    transform: scale(1.08);
+}
+
+.feedback-btn.active {
+    opacity: 1;
+    background: #e8f4fd;
+    border-color: var(--primary);
+    transform: scale(1.1);
+}
+
 

@@ -639,11 +639,52 @@ function createMessageHTML(message) {
                             ` : ''}
                         </div>
                     </div>
-                    ${canShowDetails ? '<span class="tap-hint">클릭하여 번역 보기</span>' : ''}
+                    <div class="message-footer-bar">
+                        ${canShowDetails ? '<span class="tap-hint">클릭하여 번역 보기</span>' : ''}
+                        <div class="feedback-bar" id="feedback-bar-${message.id}">
+                            <button class="feedback-btn like-btn ${message.feedback_rating === 1 ? 'active' : ''}" onclick="submitFeedback(event, '${message.id}', 1)" title="도움이 되었어요">👍</button>
+                            <button class="feedback-btn dislike-btn ${message.feedback_rating === -1 ? 'active' : ''}" onclick="submitFeedback(event, '${message.id}', -1)" title="어색하거나 피하고 싶은 답장이에요">👎</button>
+                        </div>
+                    </div>
                     <span class="timestamp">${time}</span>
                 </div>
             </div>
         `;
+    }
+}
+
+async function submitFeedback(event, messageId, rating) {
+    if (event) event.stopPropagation();
+    try {
+        const feedbackBtnBar = document.getElementById(`feedback-bar-${messageId}`);
+        if (feedbackBtnBar) {
+            feedbackBtnBar.querySelectorAll('.feedback-btn').forEach(btn => btn.classList.remove('active'));
+            const targetBtn = rating === 1 ? feedbackBtnBar.querySelector('.like-btn') : feedbackBtnBar.querySelector('.dislike-btn');
+            if (targetBtn) targetBtn.classList.add('active');
+        }
+        
+        let feedbackText = null;
+        if (rating === -1) {
+            feedbackText = prompt('어떤 점이 어색했나요? (예: 영어가 섞임, 너무 딱딱함 등)');
+        }
+
+        const res = await fetch('/api/feedback', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                message_id: messageId,
+                session_id: state.currentSessionId,
+                rating: rating,
+                feedback_text: feedbackText,
+                api_key: state.settings.apiKey
+            })
+        });
+        
+        if (res.ok) {
+            console.log(`[Feedback System] Feedback ${rating} recorded for message ${messageId}`);
+        }
+    } catch (e) {
+        console.error('Submit feedback failed:', e);
     }
 }
 

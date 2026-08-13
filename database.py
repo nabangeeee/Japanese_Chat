@@ -92,6 +92,18 @@ def init_db():
                 fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+
+        # Human Feedback table (RLHF & Self-Refinement)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS message_feedbacks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                message_id TEXT NOT NULL,
+                session_id TEXT,
+                rating INTEGER NOT NULL,
+                feedback_text TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         conn.commit()
 
 
@@ -296,5 +308,38 @@ def get_recent_live_trends(limit: int = 10) -> List[Dict[str, Any]]:
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM live_trends ORDER BY fetched_at DESC LIMIT ?", (limit,))
+        rows = cursor.fetchall()
+        return [dict(row) for row in rows]
+
+
+# --- Human Feedback Operations (RLHF & Self-Refinement) ---
+
+def save_message_feedback(message_id: str, session_id: Optional[str], rating: int, feedback_text: Optional[str] = None) -> Dict[str, Any]:
+    now = datetime.now().isoformat()
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO message_feedbacks (message_id, session_id, rating, feedback_text, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (message_id, session_id, rating, feedback_text, now)
+        )
+        conn.commit()
+        fb_id = cursor.lastrowid
+    return {
+        "id": fb_id,
+        "message_id": message_id,
+        "session_id": session_id,
+        "rating": rating,
+        "feedback_text": feedback_text,
+        "created_at": now
+    }
+
+
+def get_negative_feedbacks(limit: int = 10) -> List[Dict[str, Any]]:
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM message_feedbacks WHERE rating = -1 ORDER BY created_at DESC LIMIT ?", (limit,))
         rows = cursor.fetchall()
         return [dict(row) for row in rows]

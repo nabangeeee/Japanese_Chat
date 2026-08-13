@@ -112,3 +112,30 @@ FACTS: (상대방 학습자에 대해 알게 된 정보가 있다면 key=value �
                 facts[k.strip()] = v.strip()
 
     return summary, facts
+
+
+def analyze_feedback_with_hermes(user_text: str, ai_text: str, rating: int, feedback_text: Optional[str] = None) -> Optional[str]:
+    """Analyze human dislike feedback (-1) using Hermes agent and extract refined prompt rule."""
+    if rating != -1:
+        return None
+        
+    prompt = f"""다음 대화에서 사용자가 AI 답장에 대해 👎(싫어요) 부정적 피드백을 남겼습니다.
+이유/의견: {feedback_text or '어색하거나 비자연스러운 표현'}
+
+사용자 질문: {user_text}
+AI 기존 답장: {ai_text}
+
+이 피드백을 바탕으로 향후 대화 시 금지하거나 개선해야 할 지침 규칙 1문장을 한국어로 작성하세요.
+Format:
+RULE: (향후 대화 시 피해야 할 구체적 규칙 1문장)"""
+
+    system_prompt = "You are an AI refinement agent analyzing human feedback to improve Japanese dialogue response quality."
+    out = generate_with_hermes(prompt, system_prompt=system_prompt, temperature=0.1)
+    if not out or "RULE:" not in out:
+        return None
+
+    for line in out.split("\n"):
+        if line.startswith("RULE:"):
+            return line.replace("RULE:", "").strip()
+            
+    return None

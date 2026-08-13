@@ -17,9 +17,9 @@ from database import (
     init_db, create_session, get_all_sessions, get_session, delete_session,
     save_message, get_session_messages, save_user_memory, get_user_memories,
     save_session_summary, get_session_summary, save_user_fact, get_all_user_facts,
-    get_recent_live_trends
+    get_recent_live_trends, save_message_feedback, get_negative_feedbacks
 )
-from hermes_client import is_hermes_available, summarize_session_with_hermes, extract_grammar_errors_with_hermes
+from hermes_client import is_hermes_available, summarize_session_with_hermes, extract_grammar_errors_with_hermes, analyze_feedback_with_hermes
 from openclaw_collector import fetch_latest_japan_trends
 import uuid
 
@@ -56,6 +56,14 @@ class ChatRequest(BaseModel):
     roleplay_id: str | None = None
     roleplay_args: dict | None = None
     session_id: str | None = None
+
+
+class FeedbackRequest(BaseModel):
+    message_id: str
+    session_id: str | None = None
+    rating: int # 1 for like, -1 for dislike
+    feedback_text: str | None = None
+    api_key: str | None = None
 
 
 class TranslateRequest(BaseModel):
@@ -129,13 +137,21 @@ def get_system_prompt(partner_name: str, difficulty: str, topic: str, roleplay_i
         tr_lines = [f"- {t['title']}" for t in trends]
         trend_instruction = f"\n\n[OpenClaw Real-Time Japan Live Trends Context]\n" + "\n".join(tr_lines)
 
+    # 유저 피드백 기반 금지/개선 규칙 동적 주입
+    feedback_instruction = ""
+    facts = get_all_user_facts()
+    disliked_rules = [f["fact_value"] for f in facts if f["fact_key"].startswith("disliked_pattern_")]
+    if disliked_rules:
+        rule_lines = [f"- {r}" for r in disliked_rules[-3:]]
+        feedback_instruction = f"\n\n[Learner Feedback & Disliked Response Rules]\nThe user previously expressed dislike for certain responses. STRICTLY FOLLOW THESE RULES:\n" + "\n".join(rule_lines)
+
     base_prompt = SYSTEM_PROMPT_TEMPLATE.format(
         partner_name=partner_name,
         difficulty_prompt=difficulty_prompt,
         topic_prompt=topic_prompt
     )
     
-    return base_prompt + roleplay_instruction + memory_instruction + long_term_instruction + trend_instruction
+    return base_prompt + roleplay_instruction + memory_instruction + long_term_instruction + trend_instruction + feedback_instruction
 
 
 def _update_session_summary_background(api_key: str, session_id: str):
@@ -245,6 +261,60 @@ AI 답장: {ai_text}"""
         print(f"[Error Note Memory Error] {e}")
 
 
+def _analyze_feedback_background(api_key: str | None, message_id: str, session_id: str | None, rating: int, feedback_text: str | None = None):
+    """부정적 피드백(-1) 발생 시 Hermes(우선) -> Gemini(폴백)로 유저가 싫어한 대답 패턴 분석 및 금지 지침 생성"""
+    if rating != -1:
+        return
+        
+    try:
+        user_msg = "이전 질문"
+        ai_msg = "이전 답장"
+        if session_id:
+            messages = get_session_messages(session_id)
+            for i, m in enumerate(messages):
+                if m["id"] == message_id:
+                    ai_msg = m["content"]
+                    if i > 0:
+                        user_msg = messages[i-1]["content"]
+                    break
+
+        # 1. Hermes 우선 처리 (0원 연산)
+        if is_hermes_available():
+            rule = analyze_feedback_with_hermes(user_msg, ai_msg, rating, feedback_text)
+            if rule:
+                fact_key = f"disliked_pattern_{int(time.time())}"
+                save_user_fact(fact_key, rule)
+                print(f"[Hermes Feedback Refinement] Created rule: {rule}")
+            return
+
+        # 2. Gemini 폴백
+        if api_key:
+            client = genai.Client(api_key=api_key)
+            prompt = f"""다음 대화에서 사용자가 AI 답장에 대해 👎(싫어요) 부정적 피드백을 남겼습니다.
+이유/의견: {feedback_text or '어색하거나 비자연스러운 표현'}
+
+사용자 질문: {user_msg}
+AI 기존 답장: {ai_msg}
+
+이 피드백을 바탕으로 향후 대화 시 금지하거나 개선해야 할 지침 규칙 1문장을 한국어로 작성하세요.
+Format:
+RULE: (향후 대화 시 피해야 할 구체적 규칙 1문장)"""
+
+            res = client.models.generate_content(
+                model="gemini-3.5-flash",
+                contents=prompt,
+                config=types.GenerateContentConfig(temperature=0.1, max_output_tokens=200)
+            )
+            out = res.text or ""
+            if "RULE:" in out:
+                rule = out.replace("RULE:", "").strip()
+                fact_key = f"disliked_pattern_{int(time.time())}"
+                save_user_fact(fact_key, rule)
+                print(f"[Gemini Feedback Refinement] Created rule: {rule}")
+    except Exception as e:
+        print(f"[Feedback Refinement Error] {e}")
+
+
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
     return templates.TemplateResponse(request, "index.html")
@@ -351,11 +421,13 @@ async def api_fetch_trends(bg_tasks: BackgroundTasks):
     return {"status": "fetching_scheduled"}
 
 
-@app.post("/api/trends/fetch")
-async def api_fetch_trends(bg_tasks: BackgroundTasks):
-    """OpenClaw 백그라운드 수집기 트리거"""
-    bg_tasks.add_task(fetch_latest_japan_trends)
-    return {"status": "fetching_scheduled"}
+@app.post("/api/feedback")
+async def api_submit_feedback(req: FeedbackRequest, bg_tasks: BackgroundTasks):
+    """사용자 👍/👎 피드백 수신 및 백그라운드 Self-Refinement 분석"""
+    fb = save_message_feedback(req.message_id, req.session_id, req.rating, req.feedback_text)
+    if req.rating == -1:
+        bg_tasks.add_task(_analyze_feedback_background, req.api_key, req.message_id, req.session_id, req.rating, req.feedback_text)
+    return {"status": "saved", "feedback": fb}
 
 
 # 구글 웹 검색 RAG 트리거 전용 키워드 (기본값 OFF, 명확한 뉴스/유행/트렌드 키워드에서만 켜짐)
