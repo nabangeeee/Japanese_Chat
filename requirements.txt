@@ -17,7 +17,7 @@ httpx==0.28.1
 idna==3.11
 Jinja2==3.1.6
 jiter==0.13.0
-langsmith==0.10.15
+langfuse==4.14.4
 MarkupSafe==3.0.3
 openai==2.30.0
 orjson==3.11.9

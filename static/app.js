@@ -76,20 +76,11 @@ function renderMcpPromptsUI() {
     const container = document.getElementById('roleplayContainer');
     if (!container) return;
 
-    let html = `
-        <div class="roleplay-card ${!state.settings.roleplayId ? 'active' : ''}" data-id="" onclick="selectRoleplay(this, null)">
-            <div class="rp-card-header">
-                <span class="rp-card-title">💬 일반 대화</span>
-                <span class="rp-card-badge">기본</span>
-            </div>
-            <p class="rp-card-desc">특정 롤플레잉 없이 자유롭게 대화합니다.</p>
-        </div>
-    `;
-
+    let html = '';
     mcpPrompts.forEach(prompt => {
-        const isActive = state.settings.roleplayId === prompt.id;
+        const isActive = prompt.id === state.settings.roleplayId || (!state.settings.roleplayId && prompt.id === null);
         html += `
-            <div class="roleplay-card ${isActive ? 'active' : ''}" data-id="${prompt.id}" onclick="selectRoleplay(this, '${prompt.id}')">
+            <div class="roleplay-card ${isActive ? 'active' : ''}" onclick="selectRoleplay(this, ${prompt.id ? `'${prompt.id}'` : 'null'})">
                 <div class="rp-card-header">
                     <span class="rp-card-title">${escapeHTML(prompt.name)}</span>
                     <span class="rp-card-badge">${escapeHTML(prompt.category)}</span>
@@ -159,11 +150,6 @@ function applySettingsToUI() {
         btn.classList.toggle('active', btn.dataset.value === state.settings.difficulty);
     });
     
-    // 주제 버튼
-    document.querySelectorAll('.topic-btn').forEach(btn => {
-        btn.classList.toggle('active', btn.dataset.value === state.settings.topic);
-    });
-    
     // MCP Prompts 재렌더링
     renderMcpPromptsUI();
 
@@ -174,14 +160,10 @@ function applySettingsToUI() {
 // 상태 바 업데이트
 function updateStatusBar() {
     const difficultyStatus = document.getElementById('difficultyStatus');
-    const topicStatus = document.getElementById('topicStatus');
     const roleplayStatus = document.getElementById('roleplayStatus');
     
     if (difficultyStatus) {
         difficultyStatus.textContent = '📚 ' + DIFFICULTY_NAMES[state.settings.difficulty];
-    }
-    if (topicStatus) {
-        topicStatus.textContent = '💬 ' + TOPIC_NAMES[state.settings.topic];
     }
     if (roleplayStatus) {
         if (state.settings.roleplayId) {
@@ -197,18 +179,13 @@ function updateStatusBar() {
 function saveSettings() {
     // 이전 설정 저장
     const prevDifficulty = state.settings.difficulty;
-    const prevTopic = state.settings.topic;
     const prevRoleplayId = state.settings.roleplayId;
-    
     const prevRoleplayArgs = state.settings.roleplayArgs;
     
-    // 새 설정 가져오기 (모달 내의 버튼 및 input에서)
+    // 새 설정 가져오기
     const activeSegment = document.querySelector('#settingsModal .segment.active');
-    const activeTopic = document.querySelector('#settingsModal .topic-btn.active');
-    
     const newDifficulty = activeSegment ? activeSegment.dataset.value : 'beginner';
-    const newTopic = activeTopic ? activeTopic.dataset.value : 'free';
-    
+
     // 롤플레잉 args 수집
     const roleplayArgs = {};
     document.querySelectorAll('.rp-arg-input').forEach(input => {
@@ -222,7 +199,7 @@ function saveSettings() {
         apiKey: document.getElementById('apiKey').value,
         partnerName: document.getElementById('partnerName').value || '유키',
         difficulty: newDifficulty,
-        topic: newTopic,
+        topic: 'free',
         roleplayId: state.settings.roleplayId || null,
         roleplayArgs: roleplayArgs,
         showTranslation: document.getElementById('showTranslation').checked,
@@ -232,10 +209,9 @@ function saveSettings() {
     // localStorage에 저장
     localStorage.setItem('nihongoSettings', JSON.stringify(state.settings));
     
-    // 난이도, 주제, 롤플레잉 시나리오/옵션이 바뀌면 이전 세션은 DB에 보존하고 롤플레잉 새 대화 세션 자동 생성
+    // 난이도 또는 롤플레잉 시나리오/옵션이 바뀌면 이전 세션은 DB에 보존하고 새 세션 자동 생성
     const settingsChanged = (
         prevDifficulty !== newDifficulty ||
-        prevTopic !== newTopic ||
         prevRoleplayId !== state.settings.roleplayId ||
         JSON.stringify(prevRoleplayArgs) !== JSON.stringify(roleplayArgs)
     );
@@ -248,12 +224,7 @@ function saveSettings() {
     
     // 상태 바 업데이트
     updateStatusBar();
-    
-    // 모달 닫기
-    toggleSettings();
 }
-
-// --- DB SESSION & MEMORY MANAGEMENT ---
 
 async function initSessionSystem() {
     try {
@@ -279,7 +250,7 @@ async function initSessionSystem() {
 
 async function startNewSession(closeDrawer = true) {
     try {
-        let title = `${TOPIC_NAMES[state.settings.topic] || '자유 대화'} (${DIFFICULTY_NAMES[state.settings.difficulty] || '초급'})`;
+        let title = `🎭 일반 대화 (${DIFFICULTY_NAMES[state.settings.difficulty] || '초급'})`;
         if (state.settings.roleplayId) {
             const rp = mcpPrompts.find(p => p.id === state.settings.roleplayId);
             if (rp) {
@@ -942,4 +913,3 @@ function selectTopic(btn) {
     document.querySelectorAll('.topic-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
 }
-

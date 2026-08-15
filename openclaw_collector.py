@@ -51,7 +51,7 @@ def fetch_latest_japan_trends() -> List[Dict[str, Any]]:
             root = ET.fromstring(res.text)
             channel = root.find("channel")
             if channel is not None:
-                for item in channel.findall("item")[:5]:
+                for item in channel.findall("item")[:10]:
                     title = item.find("title").text if item.find("title") is not None else ""
                     link = item.find("link").text if item.find("link") is not None else ""
                     pub_date = item.find("pubDate").text if item.find("pubDate") is not None else ""

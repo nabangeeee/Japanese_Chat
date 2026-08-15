@@ -489,6 +489,25 @@ input[type="password"]:focus {
     border-color: var(--primary);
 }
 
+.topic-btn.disabled {
+    opacity: 0.45;
+    background: #f5f5f5 !important;
+    color: #999 !important;
+    border-color: #e0e0e0 !important;
+    cursor: not-allowed !important;
+    pointer-events: none;
+}
+
+.topic-disabled-badge {
+    font-size: 11px;
+    color: #e67e22;
+    background: #fef5e7;
+    border: 1px solid #fadbd8;
+    padding: 2px 8px;
+    border-radius: 8px;
+    font-weight: 600;
+}
+
 /* 토글 */
 .toggle-row {
     display: flex;

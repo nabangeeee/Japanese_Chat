@@ -5,7 +5,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from google import genai
 from google.genai import types
-from langsmith import traceable
+from langfuse import observe
 import os
 import time
 from dotenv import load_dotenv
@@ -21,16 +21,21 @@ from database import (
 )
 from hermes_client import is_hermes_available, summarize_session_with_hermes, extract_grammar_errors_with_hermes, analyze_feedback_with_hermes
 from openclaw_collector import fetch_latest_japan_trends
+from contextlib import asynccontextmanager
 import uuid
 
 load_dotenv()
 
-app = FastAPI(title="니혼고챗", description="일본어 학습 채팅 앱") #웹 문서 페이지 맨 위에 표시되는 문구
 
-
-@app.on_event("startup")
-def on_startup():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # 앱 시작 시 실행 (Startup)
     init_db()
+    yield
+    # 앱 종료 시 필요한 작업이 있다면 여기에 작성
+
+
+app = FastAPI(title="니혼고챗", description="일본어 학습 채팅 앱", lifespan=lifespan)
 
 
 # 정적 파일 및 템플릿 설정
@@ -430,20 +435,8 @@ async def api_submit_feedback(req: FeedbackRequest, bg_tasks: BackgroundTasks):
     return {"status": "saved", "feedback": fb}
 
 
-# 구글 웹 검색 RAG 트리거 전용 키워드 (기본값 OFF, 명확한 뉴스/유행/트렌드 키워드에서만 켜짐)
-STRICT_SEARCH_KEYWORDS = [
-    "뉴스", "유행", "트렌드", "실시간", "구글 검색", "웹 검색", "핫이슈",
-    "ニュース", "トレンド", "リアルタイム", "話題", "流行り"
-]
-
-
-def _needs_web_search(message: str) -> bool:
-    msg = message.lower()
-    return any(keyword in msg for keyword in STRICT_SEARCH_KEYWORDS)
-
-
 @app.post("/api/chat")
-@traceable(name="gemini_chat")
+@observe(name="gemini_chat")
 async def chat(req: ChatRequest, bg_tasks: BackgroundTasks):
     if not req.api_key:
         raise HTTPException(status_code=400, detail="API 키가 필요합니다.")
@@ -473,35 +466,24 @@ async def chat(req: ChatRequest, bg_tasks: BackgroundTasks):
         contents.append(types.Content(role="user", parts=[types.Part.from_text(text=req.message)]))
         
         start_t = time.time()
-        use_search = _needs_web_search(req.message)
-        print(f"[Chat API START] Message: '{req.message}' | Search Triggered: {use_search}")
+        print(f"[Agentic Chat API START] Message: '{req.message}' | Autonomous Tool Calling Enabled")
         
-        if use_search:
-            config_search = types.GenerateContentConfig(
-                system_instruction=sys_prompt,
-                temperature=0.8,
-                max_output_tokens=1000,
-                tools=[types.Tool(google_search=types.GoogleSearch())]
+        # Agentic Tool Calling Config (LLM이 질문 맥락을 자율 판단하여 구글 검색 툴 호출)
+        config_agentic = types.GenerateContentConfig(
+            system_instruction=sys_prompt,
+            temperature=0.8,
+            max_output_tokens=1000,
+            tools=[types.Tool(google_search=types.GoogleSearch())]
+        )
+        
+        try:
+            response = client.models.generate_content(
+                model="gemini-3.5-flash",
+                contents=contents,
+                config=config_agentic
             )
-            try:
-                response = client.models.generate_content(
-                    model="gemini-3.5-flash",
-                    contents=contents,
-                    config=config_search
-                )
-            except Exception as search_err:
-                print(f"[Chat API] Search failed ({search_err}). Falling back to basic mode.")
-                config_basic = types.GenerateContentConfig(
-                    system_instruction=sys_prompt,
-                    temperature=0.8,
-                    max_output_tokens=1000
-                )
-                response = client.models.generate_content(
-                    model="gemini-3.5-flash",
-                    contents=contents,
-                    config=config_basic
-                )
-        else:
+        except Exception as tool_err:
+            print(f"[Agentic Tool Calling Warning] ({tool_err}). Falling back to basic generation.")
             config_basic = types.GenerateContentConfig(
                 system_instruction=sys_prompt,
                 temperature=0.8,
@@ -514,7 +496,7 @@ async def chat(req: ChatRequest, bg_tasks: BackgroundTasks):
             )
         
         elapsed = time.time() - start_t
-        print(f"[Chat API END] Completed in {elapsed:.2f} seconds.")
+        print(f"[Agentic Chat API END] Completed in {elapsed:.2f} seconds.")
         raw = response.text or ""
         clean_res = redact_sensitive_output(raw)
         
@@ -535,7 +517,7 @@ async def chat(req: ChatRequest, bg_tasks: BackgroundTasks):
 
 
 @app.post("/api/translate")
-@traceable(name="gemini_translate")
+@observe(name="gemini_translate")
 async def translate(req: TranslateRequest):
     if not req.api_key:
         raise HTTPException(status_code=400, detail="API 키가 필요합니다.")
@@ -549,7 +531,7 @@ async def translate(req: TranslateRequest):
         config = types.GenerateContentConfig(
             system_instruction=TRANSLATE_PROMPT,
             temperature=0.3,
-            max_output_tokens=500
+            max_output_tokens=1200
         )
         
         response = client.models.generate_content(
@@ -568,7 +550,7 @@ async def translate(req: TranslateRequest):
 
 
 @app.post("/api/furigana")
-@traceable(name="gemini_furigana")
+@observe(name="gemini_furigana")
 async def furigana(req: TranslateRequest):
     if not req.api_key:
         raise HTTPException(status_code=400, detail="API 키가 필요합니다.")
@@ -582,7 +564,7 @@ async def furigana(req: TranslateRequest):
         config = types.GenerateContentConfig(
             system_instruction=FURIGANA_PROMPT,
             temperature=0.1,
-            max_output_tokens=500
+            max_output_tokens=1200
         )
         
         response = client.models.generate_content(
@@ -670,21 +652,24 @@ Important Rules:
 
 # --------------------------------------------------------------------------------------
 
-# Translation Prompt
-TRANSLATE_PROMPT = """주어진 일본어 문장을 자연스러운 한국어로 번역하세요.
-중요 지침:
-- 영어 설명, 부연 해설, 서식 표식(*, Sentence 등) 없이 오직 한국어 번역 결과 문장만 그대로 출력하세요.
-- 예: "안녕하세요. 오늘 날씨가 참 좋네요." """
+# Translation Prompt (English System Instruction for Highest Precision)
+TRANSLATE_PROMPT = """You are an expert Japanese-to-Korean translator.
+Translate the provided Japanese text into natural, fluent, and polite Korean.
+CRITICAL INSTRUCTIONS:
+- Translate 100% of the input text from start to finish without omitting or truncating any sentences.
+- Do NOT output any English explanations, notes, grammatical breakdown, or formatting markers (*, Sentence, etc.).
+- Output ONLY the clean, final Korean translation text."""
 
 # --------------------------------------------------------------------------------------
 
-# Furigana Prompt
-FURIGANA_PROMPT = """주어진 일본어 문장의 한자 뒤에 괄호로 히라가나 읽는 법(후리가나)을 표기하세요.
-중요 지침:
-- 영문 문법 설명, 영어 주석, 용법 비교 코멘트("is acceptable", "usually" 등), 피드백 표기를 절대로 출력하지 마세요!
-- 오직 올바른 후리가나가 달린 일본어 문장 결과만 그대로 출력하세요.
-- 형식: 한자(히라가나)
-- 예: 今日(きょう)は天気(てんき)がいいですね。"""
+# Furigana Prompt (English System Instruction for Highest Precision)
+FURIGANA_PROMPT = """You are a Japanese linguistics expert.
+Add hiragana furigana readings in parentheses directly after every Kanji (漢字) in the provided Japanese text.
+CRITICAL INSTRUCTIONS:
+- Preserve 100% of the original Japanese text structure from start to finish without truncating or omitting any words.
+- Add parentheses ONLY after Kanji (漢字). Do NOT add parentheses to Hiragana, Katakana, punctuation, or emojis.
+- Do NOT include any English explanations, grammatical commentary, or notes.
+- Output Format Example: 店内(てんない)でお召(め)し上(あ)がりですか、それともお持(も)ち帰(かえ)りですか？"""
 
 # --------------------------------------------------------------------------------------
 
