@@ -1,0 +1,9 @@
+=== Hermes Auto Fix Blueprint (Iteration 1) ===
+
+DIAGNOSIS: 코드에서 '+' 연산자 뒤에 괄호가 빠져있어 문법 오류가 발생했습니다.
+
+FIX_BLUEPRINT: 'calculate_total' 함수 내에서 'price'와 'tax'를 더하기 전에 'tax' 변수의 괄호를 열고 닫아야 합니다. 아래처럼 수정하세요.
+def calculate_total(price, tax):
+    return price + tax
+
+이렇게 수정하면 코드는 정상 실행될 것입니다.

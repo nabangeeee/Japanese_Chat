@@ -40,7 +40,7 @@ def generate_with_hermes(prompt: str, system_prompt: Optional[str] = None, tempe
             "max_tokens": max_tokens
         }
         
-        res = requests.post(url, json=payload, timeout=15)
+        res = requests.post(url, json=payload, timeout=45)
         if res.status_code == 200:
             data = res.json()
             return data["choices"][0]["message"]["content"].strip()

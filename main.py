@@ -144,11 +144,11 @@ def get_system_prompt(partner_name: str, difficulty: str, topic: str, roleplay_i
 
     # 유저 피드백 기반 금지/개선 규칙 동적 주입
     feedback_instruction = ""
-    facts = get_all_user_facts()
-    disliked_rules = [f["fact_value"] for f in facts if f["fact_key"].startswith("disliked_pattern_")]
+    all_facts = get_all_user_facts()
+    disliked_rules = [f["fact_value"] for f in all_facts if f["fact_key"].startswith("disliked_pattern_")]
     if disliked_rules:
         rule_lines = [f"- {r}" for r in disliked_rules[-3:]]
-        feedback_instruction = f"\n\n[Learner Feedback & Disliked Response Rules]\nThe user previously expressed dislike for certain responses. STRICTLY FOLLOW THESE RULES:\n" + "\n".join(rule_lines)
+        feedback_instruction = f"\n\n[Hermes Self-Correction & Refinement Rules]\nThe Hermes Agent analyzed past user feedback/errors and extracted these refinement rules. STRICTLY FOLLOW THESE RULES:\n" + "\n".join(rule_lines)
 
     base_prompt = SYSTEM_PROMPT_TEMPLATE.format(
         partner_name=partner_name,
