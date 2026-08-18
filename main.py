@@ -20,8 +20,10 @@ from database import (
     get_recent_live_trends, save_message_feedback, get_negative_feedbacks
 )
 from hermes_client import is_hermes_available, summarize_session_with_hermes, extract_grammar_errors_with_hermes, analyze_feedback_with_hermes
+from codex_hermes_loop import diagnose_with_hermes, run_codex_hermes_self_healing_loop
 from openclaw_collector import fetch_latest_japan_trends
 from contextlib import asynccontextmanager
+import traceback
 import uuid
 
 load_dotenv()
@@ -180,34 +182,39 @@ def _update_session_summary_background(api_key: str, session_id: str):
 
         # 2. Hermes 오프라인 시 Gemini API로 자동 폴백
         client = genai.Client(api_key=api_key)
-        prompt = f"""다음 대화 내용을 바탕으로 100% 자연스러운 한국어로만 핵심 요약본을 작성하세요.
-중요 지침:
-- 일본어나 영어를 섞지 말고 오직 깔끔한 한국어로만 작성하세요.
+        prompt = f"""Summarize the following Japanese conversation in 100% fluent Korean.
+CRITICAL INSTRUCTIONS:
+- Translate ALL Japanese words into natural Korean. Absolutely NO Japanese characters (Hiragana, Katakana, Kanji) allowed in the summary! (e.g., translate おすすめ as 추천).
+- Output ONLY the Korean summary and learner facts in the exact format below.
 
 Format:
-SUMMARY: (대화의 핵심 주제 및 학습자의 언급 사항을 한국어로 2문장으로 요약)
-FACTS: (상대방 학습자에 대해 알게 된 정보가 있다면 key=value 형식으로 작성, 없으면 NONE)
+SUMMARY: (Summary of dialogue in 100% natural Korean, 2 sentences max)
+FACTS: (Learner facts in key=value format, or NONE)
 
-대화 내용:
+Dialogue Text:
 {dialogue_text}"""
 
         res = client.models.generate_content(
             model="gemini-3.5-flash",
             contents=prompt,
-            config=types.GenerateContentConfig(temperature=0.2, max_output_tokens=300)
+            config=types.GenerateContentConfig(temperature=0.1, max_output_tokens=300)
         )
         
         out = res.text or ""
         summary = ""
         for line in out.split("\n"):
-            if line.startswith("SUMMARY:"):
-                summary = line.replace("SUMMARY:", "").strip()
-            elif line.startswith("FACTS:") and "NONE" not in line:
-                fact_part = line.replace("FACTS:", "").strip()
+            if "SUMMARY:" in line:
+                summary = line.split("SUMMARY:")[1].strip()
+            elif "FACTS:" in line and "NONE" not in line:
+                fact_part = line.split("FACTS:")[1].strip()
                 if "=" in fact_part:
                     k, v = fact_part.split("=", 1)
                     save_user_fact(k.strip(), v.strip())
                     
+        # Clean FACTS leftover from summary if present
+        if "FACTS:" in summary:
+            summary = summary.split("FACTS:")[0].strip()
+
         if summary:
             save_session_summary(session_id, summary)
             print(f"[Gemini Summary] Updated summary for session '{session_id}': {summary[:40]}...")
@@ -318,6 +325,22 @@ RULE: (향후 대화 시 피해야 할 구체적 규칙 1문장)"""
                 print(f"[Gemini Feedback Refinement] Created rule: {rule}")
     except Exception as e:
         print(f"[Feedback Refinement Error] {e}")
+
+
+def _trigger_codex_hermes_self_healing_background(api_key: str | None, error_trace: str):
+    """서버 런타임 오류 발생 시 백그라운드에서 Hermes 0원 진단 및 Codex 자율 코드 수복 루프 가동"""
+    try:
+        print("[Self-Healing Middleware] Server Exception detected. Triggering Hermes 0-cost diagnosis...")
+        blueprint = diagnose_with_hermes("main.py Exception Trace", error_trace)
+        
+        # Save fix blueprint to scratch/fix_blueprint.txt
+        blueprint_file_path = os.path.join(os.path.dirname(__file__), "scratch", "fix_blueprint.txt")
+        os.makedirs(os.path.dirname(blueprint_file_path), exist_ok=True)
+        with open(blueprint_file_path, "w", encoding="utf-8") as bf:
+            bf.write(f"=== Hermes Auto Server Exception Blueprint ({time.strftime('%Y-%m-%d %H:%M:%S')}) ===\n\n{blueprint}\n\n[Full Error Trace]\n{error_trace}\n")
+        print(f"[Self-Healing Middleware] 💾 Fix Blueprint saved to {blueprint_file_path}")
+    except Exception as e:
+        print(f"[Self-Healing Middleware Error] {e}")
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -513,6 +536,8 @@ async def chat(req: ChatRequest, bg_tasks: BackgroundTasks):
         return {"response": clean_res}
     
     except Exception as e:
+        err_trace = traceback.format_exc()
+        bg_tasks.add_task(_trigger_codex_hermes_self_healing_background, req.api_key, err_trace)
         raise HTTPException(status_code=500, detail=str(e))
 
 

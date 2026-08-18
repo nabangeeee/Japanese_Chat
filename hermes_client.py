@@ -84,32 +84,37 @@ AI 답장: {ai_text}"""
 
 def summarize_session_with_hermes(dialogue_text: str) -> Tuple[Optional[str], Dict[str, str]]:
     """Summarize session dialogue and extract learner facts using Hermes model."""
-    prompt = f"""다음 대話 내용을 바탕으로 100% 자연스러운 한국어로만 핵심 요약본을 작성하세요.
-중요 지침:
-- 일본어나 영어를 섞지 말고 오직 깔끔한 한국어로만 작성하세요.
+    prompt = f"""Summarize the following Japanese conversation in 100% fluent Korean.
+CRITICAL INSTRUCTIONS:
+- Translate ALL Japanese words into natural Korean. Absolutely NO Japanese characters (Hiragana, Katakana, Kanji) allowed in the summary! (e.g., translate おすすめ as 추천).
+- Output ONLY the Korean summary and learner facts in the exact format below.
 
 Format:
-SUMMARY: (대화의 핵심 주제 및 학습자의 언급 사항을 한국어로 2문장으로 요약)
-FACTS: (상대방 학습자에 대해 알게 된 정보가 있다면 key=value 형식으로 작성, 없으면 NONE)
+SUMMARY: (Summary of dialogue in 100% natural Korean, 2 sentences max)
+FACTS: (Learner facts in key=value format, or NONE)
 
-대화 내용:
+Dialogue Text:
 {dialogue_text}"""
 
-    system_prompt = "You are a helpful assistant providing concise Korean conversation summaries and learner facts."
-    out = generate_with_hermes(prompt, system_prompt=system_prompt, temperature=0.2)
+    system_prompt = "You are a professional Korean summarization agent. Write clean Korean summaries without Japanese words."
+    out = generate_with_hermes(prompt, system_prompt=system_prompt, temperature=0.1)
     if not out:
         return None, {}
 
     summary = ""
     facts = {}
     for line in out.split("\n"):
-        if line.startswith("SUMMARY:"):
-            summary = line.replace("SUMMARY:", "").strip()
-        elif line.startswith("FACTS:") and "NONE" not in line:
-            fact_part = line.replace("FACTS:", "").strip()
+        if "SUMMARY:" in line:
+            summary = line.split("SUMMARY:")[1].strip()
+        elif "FACTS:" in line and "NONE" not in line:
+            fact_part = line.split("FACTS:")[1].strip()
             if "=" in fact_part:
                 k, v = fact_part.split("=", 1)
                 facts[k.strip()] = v.strip()
+
+    # Clean FACTS leftover from summary if present
+    if "FACTS:" in summary:
+        summary = summary.split("FACTS:")[0].strip()
 
     return summary, facts
 
