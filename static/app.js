@@ -155,6 +155,12 @@ function applySettingsToUI() {
 
     // 상태 바 업데이트
     updateStatusBar();
+    
+    // 설정 모달 명시적 닫기
+    const modal = document.getElementById('settingsModal');
+    if (modal) {
+        modal.classList.remove('show');
+    }
 }
 
 // 상태 바 업데이트
@@ -177,53 +183,64 @@ function updateStatusBar() {
 
 // 설정 저장
 function saveSettings() {
-    // 이전 설정 저장
-    const prevDifficulty = state.settings.difficulty;
-    const prevRoleplayId = state.settings.roleplayId;
-    const prevRoleplayArgs = state.settings.roleplayArgs;
-    
-    // 새 설정 가져오기
-    const activeSegment = document.querySelector('#settingsModal .segment.active');
-    const newDifficulty = activeSegment ? activeSegment.dataset.value : 'beginner';
+    try {
+        const apiKeyEl = document.getElementById('apiKey');
+        const partnerNameEl = document.getElementById('partnerName');
+        const showTransEl = document.getElementById('showTranslation');
+        const showFuriEl = document.getElementById('showFurigana');
 
-    // 롤플레잉 args 수집
-    const roleplayArgs = {};
-    document.querySelectorAll('.rp-arg-input').forEach(input => {
-        const argName = input.dataset.argName;
-        if (argName) {
-            roleplayArgs[argName] = input.value.trim();
+        const prevDifficulty = state.settings ? state.settings.difficulty : 'beginner';
+        const prevRoleplayId = state.settings ? state.settings.roleplayId : null;
+        const prevRoleplayArgs = state.settings ? state.settings.roleplayArgs : {};
+        
+        const activeSegment = document.querySelector('#settingsModal .segment.active');
+        const newDifficulty = activeSegment ? activeSegment.dataset.value : 'beginner';
+
+        const roleplayArgs = {};
+        document.querySelectorAll('.rp-arg-input').forEach(input => {
+            const argName = input.dataset.argName;
+            if (argName) {
+                roleplayArgs[argName] = input.value.trim();
+            }
+        });
+
+        state.settings = {
+            apiKey: apiKeyEl ? apiKeyEl.value : (state.settings ? state.settings.apiKey : ''),
+            partnerName: partnerNameEl ? partnerNameEl.value : '유키',
+            difficulty: newDifficulty,
+            topic: 'free',
+            roleplayId: state.settings ? state.settings.roleplayId : null,
+            roleplayArgs: roleplayArgs,
+            showTranslation: showTransEl ? showTransEl.checked : true,
+            showFurigana: showFuriEl ? showFuriEl.checked : true
+        };
+        
+        localStorage.setItem('nihongoSettings', JSON.stringify(state.settings));
+        
+        const settingsChanged = (
+            prevDifficulty !== newDifficulty ||
+            prevRoleplayId !== state.settings.roleplayId ||
+            JSON.stringify(prevRoleplayArgs) !== JSON.stringify(roleplayArgs)
+        );
+        
+        if (settingsChanged) {
+            startNewSession(false);
+        } else if (state.messages.length === 0) {
+            addWelcomeMessage();
         }
-    });
-
-    state.settings = {
-        apiKey: document.getElementById('apiKey').value,
-        partnerName: document.getElementById('partnerName').value || '유키',
-        difficulty: newDifficulty,
-        topic: 'free',
-        roleplayId: state.settings.roleplayId || null,
-        roleplayArgs: roleplayArgs,
-        showTranslation: document.getElementById('showTranslation').checked,
-        showFurigana: document.getElementById('showFurigana').checked
-    };
-    
-    // localStorage에 저장
-    localStorage.setItem('nihongoSettings', JSON.stringify(state.settings));
-    
-    // 난이도 또는 롤플레잉 시나리오/옵션이 바뀌면 이전 세션은 DB에 보존하고 새 세션 자동 생성
-    const settingsChanged = (
-        prevDifficulty !== newDifficulty ||
-        prevRoleplayId !== state.settings.roleplayId ||
-        JSON.stringify(prevRoleplayArgs) !== JSON.stringify(roleplayArgs)
-    );
-    
-    if (settingsChanged) {
-        startNewSession(false);
-    } else if (state.messages.length === 0) {
-        addWelcomeMessage();
+        
+        updateStatusBar();
+    } catch (err) {
+        console.error('Error saving settings:', err);
+    } finally {
+        // 어떤 경우에도 저장 버튼 클릭 시 설정 모달 100% 닫기 보장
+        const modal = document.getElementById('settingsModal');
+        if (modal) {
+            modal.classList.remove('show');
+            modal.style.display = 'none';
+            setTimeout(() => { modal.style.display = ''; }, 300);
+        }
     }
-    
-    // 상태 바 업데이트
-    updateStatusBar();
 }
 
 async function initSessionSystem() {

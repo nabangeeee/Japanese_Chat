@@ -297,6 +297,13 @@ def _analyze_feedback_background(api_key: str | None, message_id: str, session_i
                 fact_key = f"disliked_pattern_{int(time.time())}"
                 save_user_fact(fact_key, rule)
                 print(f"[Hermes Feedback Refinement] Created rule: {rule}")
+                
+                # Save feedback blueprint to scratch/fix_blueprint.txt
+                blueprint_file_path = os.path.join(os.path.dirname(__file__), "scratch", "fix_blueprint.txt")
+                os.makedirs(os.path.dirname(blueprint_file_path), exist_ok=True)
+                with open(blueprint_file_path, "w", encoding="utf-8") as bf:
+                    bf.write(f"=== Hermes Feedback Self-Refinement Blueprint ({time.strftime('%Y-%m-%d %H:%M:%S')}) ===\n\n[User Message]: {user_msg}\n[AI Answer]: {ai_msg}\n[Feedback Reason]: {feedback_text or '어색하거나 비자연스러운 표현'}\n\n[Hermes Extracted Rule]:\n{rule}\n")
+                print(f"[Hermes Feedback Refinement] 💾 Saved Feedback Blueprint to {blueprint_file_path}")
             return
 
         # 2. Gemini 폴백
