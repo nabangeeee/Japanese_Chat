@@ -140,7 +140,32 @@ RULE: (향후 대화 시 피해야 할 구체적 규칙 1문장)"""
         return None
 
     for line in out.split("\n"):
-        if line.startswith("RULE:"):
-            return line.replace("RULE:", "").strip()
+        if "RULE:" in line:
+            return line.split("RULE:")[1].strip()
             
+    return None
+
+
+def self_critique_response_with_hermes(user_text: str, ai_text: str) -> Optional[str]:
+    """Audit AI response for unnatural Japanese phrasing or clerk roleplay errors using Hermes 0-cost local model."""
+    prompt = f"""Evaluate if the following AI response in Japanese contains awkward phrasing, unnatural clerk repetition (e.g. repeating 'をお願いします'), or grammar flaws.
+
+User Input: {user_text}
+AI Response: {ai_text}
+
+If the response is completely natural, output NONE.
+If there is an awkward phrase or roleplay flaw, output a 1-sentence refinement rule in Korean starting with 'RULE:'.
+
+Format:
+RULE: (향후 대화 시 피해야 할 개선 지침 1문장)"""
+
+    system_prompt = "You are a professional Japanese linguistic auditor. Evaluate response naturalness strictly."
+    out = generate_with_hermes(prompt, system_prompt=system_prompt, temperature=0.1)
+    if not out or "NONE" in out or "RULE:" not in out:
+        return None
+
+    for line in out.split("\n"):
+        if "RULE:" in line:
+            return line.split("RULE:")[1].strip()
+
     return None
