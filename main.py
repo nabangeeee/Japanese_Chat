@@ -19,7 +19,7 @@ from database import (
     save_session_summary, get_session_summary, save_user_fact, get_all_user_facts,
     get_recent_live_trends, save_message_feedback, get_negative_feedbacks
 )
-from hermes_client import is_hermes_available, summarize_session_with_hermes, extract_grammar_errors_with_hermes, analyze_feedback_with_hermes, self_critique_response_with_hermes
+from hermes_client import is_hermes_available, summarize_session_with_hermes, extract_grammar_errors_with_hermes, analyze_feedback_with_hermes, self_critique_response_with_hermes, generate_with_hermes
 from codex_hermes_loop import diagnose_with_hermes, run_codex_hermes_self_healing_loop
 from openclaw_collector import fetch_latest_japan_trends
 from contextlib import asynccontextmanager
@@ -144,12 +144,14 @@ def get_system_prompt(partner_name: str, difficulty: str, topic: str, roleplay_i
         tr_lines = [f"- {t['title']}" for t in trends]
         trend_instruction = f"\n\n[OpenClaw Real-Time Japan Live Trends Context]\n" + "\n".join(tr_lines)
 
-    # 유저 피드백 기반 금지/개선 규칙 동적 주입
+    # 유저 피드백 기반 금지/개선 규칙 동적 주입 (최신 중복 제거 2개로 제한하여 55초 병목 해소)
     feedback_instruction = ""
     all_facts = get_all_user_facts()
     disliked_rules = [f["fact_value"] for f in all_facts if f["fact_key"].startswith("disliked_pattern_")]
     if disliked_rules:
-        rule_lines = [f"- {r}" for r in disliked_rules[-3:]]
+        # 중복 규칙 제거 후 최신 2개만 프롬프트 주입
+        unique_rules = list(dict.fromkeys(disliked_rules))
+        rule_lines = [f"- {r}" for r in unique_rules[-2:]]
         feedback_instruction = f"\n\n[Hermes Self-Correction & Refinement Rules]\nThe Hermes Agent analyzed past user feedback/errors and extracted these refinement rules. STRICTLY FOLLOW THESE RULES:\n" + "\n".join(rule_lines)
 
     base_prompt = SYSTEM_PROMPT_TEMPLATE.format(
@@ -178,6 +180,19 @@ def _update_session_summary_background(api_key: str, session_id: str):
                 print(f"[Hermes Agent Summary] Updated summary for session '{session_id}': {summary[:40]}...")
             for k, v in facts.items():
                 save_user_fact(k, v)
+                
+            # 유저가 대화를 잠시 멈춘 오프라인 시점에 배치 심사 (채팅 속도 영향 0%)
+            last_user_msg = ""
+            last_ai_msg = ""
+            for m in reversed(messages):
+                if m["role"] == "assistant" and not last_ai_msg:
+                    last_ai_msg = m["content"]
+                elif m["role"] == "user" and not last_user_msg:
+                    last_user_msg = m["content"]
+                if last_user_msg and last_ai_msg:
+                    break
+            if last_user_msg and last_ai_msg:
+                _self_critique_ai_response_background(last_user_msg, last_ai_msg)
             return
 
         # 2. Hermes 오프라인 시 Gemini API로 자동 폴백
@@ -520,48 +535,78 @@ async def chat(req: ChatRequest, bg_tasks: BackgroundTasks):
         start_t = time.time()
         print(f"[Agentic Chat API START] Message: '{req.message}' | Autonomous Tool Calling Enabled")
         
-        # Agentic Tool Calling Config (LLM이 질문 맥락을 자율 판단하여 구글 검색 툴 호출)
+        # Agentic Tool Calling Config (질문 맥락에 '검색'이나 '최신', '뉴스'가 포함된 경우에만 Google Search 툴 호출하여 55초 지연 해소)
+        search_keywords = ["검색", "뉴스", "트렌드", "최신", "search", "news", "trend"]
+        needs_search = any(k in req.message.lower() for k in search_keywords)
+        
+        tools = [types.Tool(google_search=types.GoogleSearch())] if needs_search else None
         config_agentic = types.GenerateContentConfig(
             system_instruction=sys_prompt,
             temperature=0.8,
             max_output_tokens=1000,
-            tools=[types.Tool(google_search=types.GoogleSearch())]
+            tools=tools
         )
         
-        try:
-            response = client.models.generate_content(
-                model="gemini-3.5-flash",
-                contents=contents,
-                config=config_agentic
-            )
-        except Exception as tool_err:
-            print(f"[Agentic Tool Calling Warning] ({tool_err}). Falling back to basic generation.")
-            config_basic = types.GenerateContentConfig(
-                system_instruction=sys_prompt,
-                temperature=0.8,
-                max_output_tokens=1000
-            )
-            response = client.models.generate_content(
-                model="gemini-3.5-flash",
-                contents=contents,
-                config=config_basic
-            )
-        
-        elapsed = time.time() - start_t
-        print(f"[Agentic Chat API END] Completed in {elapsed:.2f} seconds.")
-        raw = response.text or ""
+        raw = ""
+        # 503 과부하 에러 3회 재시도 (Exponential Backoff Auto-Retry)
+        for attempt in range(3):
+            try:
+                response = client.models.generate_content(
+                    model="gemini-3.5-flash",
+                    contents=contents,
+                    config=config_agentic
+                )
+                raw = response.text or ""
+                break
+            except Exception as tool_err:
+                err_msg = str(tool_err)
+                print(f"[Gemini API Attempt {attempt+1}] Warning/Error: {err_msg}")
+                if "503" in err_msg or "UNAVAILABLE" in err_msg:
+                    time.sleep(1.0 * (attempt + 1))
+                    continue
+                
+                # 503 외 에러 시 기본 생성 시도
+                try:
+                    config_basic = types.GenerateContentConfig(
+                        system_instruction=sys_prompt,
+                        temperature=0.8,
+                        max_output_tokens=1000
+                    )
+                    response = client.models.generate_content(
+                        model="gemini-3.5-flash",
+                        contents=contents,
+                        config=config_basic
+                    )
+                    raw = response.text or ""
+                    break
+                except Exception as basic_err:
+                    print(f"[Gemini Basic Attempt {attempt+1}] Failed: {basic_err}")
+                    time.sleep(1.0 * (attempt + 1))
+
+        # 만약 Gemini API가 구글 과부하(503)로 3회 모두 실패했을 때, 로컬 Hermes로 오프라인 0원 무중단 자동 폴백!
+        if not raw and is_hermes_available():
+            print("[Gemini 503 Fallback] Gemini API unavailable due to traffic spike. Falling back to 0-cost Local Hermes 3...")
+            hermes_prompt = f"{sys_prompt}\n\nUser: {req.message}\nAssistant:"
+            raw = generate_with_hermes(hermes_prompt, system_prompt=sys_prompt, temperature=0.7, max_tokens=600) or ""
+            if raw:
+                print("[Gemini 503 Fallback Success] Successfully generated response using Local Hermes!")
+
+        if not raw:
+            raw = "죄송합니다. 현재 구글 Gemini 서버 트래픽이 폭주 중(503)입니다. 잠시 후 다시 시도해 주세요!"
         clean_res = redact_sensitive_output(raw)
         
-        # 세션 ID가 제공되었다면 유저 메시지 및 AI 답장 DB 저장
+        elapsed = round(time.time() - start_t, 2)
+        print(f"[Agentic Chat API END] Completed in {elapsed:.2f} seconds.")
+        
+        # 세션 ID가 제공되었다면 유저 메시지 및 AI 답장 DB 저장 (소요 런타임 초 정밀 기록)
         if req.session_id:
             user_msg_id = f"usr_{int(time.time() * 1000)}"
             assistant_msg_id = f"ast_{int(time.time() * 1000) + 1}"
             save_message(user_msg_id, req.session_id, "user", req.message)
-            save_message(assistant_msg_id, req.session_id, "assistant", clean_res)
-            # 백그라운드 대화 요약 & 오답 노트 파싱 & AI 답장 자가 검수 태스크 등록
+            save_message(assistant_msg_id, req.session_id, "assistant", clean_res, response_time_sec=elapsed)
+            # 백그라운드 대화 요약 & 오답 노트 파싱 태스크 등록 (실시간 채팅 속도 100% 보장)
             bg_tasks.add_task(_update_session_summary_background, req.api_key, req.session_id)
             bg_tasks.add_task(_extract_grammar_errors_background, req.api_key, req.message, clean_res)
-            bg_tasks.add_task(_self_critique_ai_response_background, req.message, clean_res)
 
         return {"response": clean_res}
     

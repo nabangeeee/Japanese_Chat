@@ -147,25 +147,39 @@ RULE: (향후 대화 시 피해야 할 구체적 규칙 1문장)"""
 
 
 def self_critique_response_with_hermes(user_text: str, ai_text: str) -> Optional[str]:
-    """Audit AI response for unnatural Japanese phrasing or clerk roleplay errors using Hermes 0-cost local model."""
-    prompt = f"""Evaluate if the following AI response in Japanese contains awkward phrasing, unnatural clerk repetition (e.g. repeating 'をお願いします'), or grammar flaws.
+    """Act as LLM-as-a-Judge using 0-cost local Hermes to evaluate Japanese dialogue naturalness & roleplay fidelity."""
+    prompt = f"""You are an elite Japanese Dialogue Quality Auditor (LLM-as-a-Judge).
+Evaluate the following AI response in a Japanese conversation/roleplay setting.
 
-User Input: {user_text}
-AI Response: {ai_text}
+[User Input]: {user_text}
+[AI Response]: {ai_text}
 
-If the response is completely natural, output NONE.
-If there is an awkward phrase or roleplay flaw, output a 1-sentence refinement rule in Korean starting with 'RULE:'.
+AUDIT CHECKLIST:
+1. Is the Japanese phrasing 100% natural for a native speaker?
+2. Does it avoid unnatural parrot-repetition (e.g. repeating 'をお願いします' back to a customer)?
+3. Does it strictly adhere to the role (e.g. cafe staff / airport agent)?
+4. Is it free from awkward literal translations or weird grammar?
 
-Format:
-RULE: (향후 대화 시 피해야 할 개선 지침 1문장)"""
+CRITICAL OUTPUT RULES:
+- If the response passes all audit checks, output ONLY: PASS
+- If there is ANY flaw, output EXACTLY ONE actionable instruction in Korean for future responses starting with 'RULE:'.
 
-    system_prompt = "You are a professional Japanese linguistic auditor. Evaluate response naturalness strictly."
+Example output for flaw:
+RULE: 손님이 '店内でお召し上がり'를 언급할 때는 'をお願いします'라고 되뇌지 말고 '店内でお召し上がりですね' 또는 'かしこまりました'로 정중히 수긍하세요.
+
+Audit Result:"""
+
+    system_prompt = "You are a strict LLM-as-a-Judge for Japanese conversational naturalness and roleplay accuracy."
     out = generate_with_hermes(prompt, system_prompt=system_prompt, temperature=0.1)
-    if not out or "NONE" in out or "RULE:" not in out:
+    if not out or "PASS" in out:
         return None
 
     for line in out.split("\n"):
         if "RULE:" in line:
-            return line.split("RULE:")[1].strip()
+            clean_rule = line.split("RULE:")[1].strip()
+            # Remove any wrapping quotes or markdown if present
+            clean_rule = clean_rule.strip('"').strip("'").strip("`")
+            if clean_rule:
+                return clean_rule
 
     return None

@@ -1,6 +1,6 @@
 # 🇯🇵 NihongoChat (日本語 Chat)
 
-> **Hybrid AI Japanese Learning Agent featuring $0 Operating Cost, 0.5s Low Latency, Real-Time Local RAG, and Autonomous Codex & Hermes Self-Healing Loop**
+> **Hybrid AI Japanese Learning Agent featuring $0 Operating Cost, 5s Low Latency (54% Reduction from 11s), Real-Time Local RAG, and Autonomous Codex & Hermes Self-Healing Loop**
 
 ![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-009688?style=for-the-badge&logo=fastapi&logoColor=white)
@@ -14,15 +14,15 @@
 
 **NihongoChat** is an advanced hybrid AI agent pipeline built to solve critical bottlenecks in conversational AI applications: **high response latency (11s)**, **accumulating cloud API costs**, **lack of real-time local context**, and **manual code debugging overhead**.
 
-By decoupling conversation generation from auxiliary text processing, NihongoChat reduced user-perceived latency by **54% (down to 0.5s)**. Background tasks like session summarization, grammar error parsing, and negative feedback analysis are offloaded to a **local Ollama Hermes 3 (8B)** LLM, achieving **$0 background operating cost**. Furthermore, an autonomous **Codex + Hermes Self-Healing Loop** automatically diagnoses runtime exceptions and user feedback, generating fix blueprints (`fix_blueprint.txt`) and mutating code autonomously.
+By decoupling conversation generation from auxiliary text processing, NihongoChat reduced user-perceived latency by **54% (down to 5s from 11s)**. Background tasks like session summarization, grammar error parsing, and negative feedback analysis are offloaded to a **local Ollama Hermes 3 (8B)** LLM, achieving **$0 background operating cost**. Furthermore, an autonomous **Codex + Hermes Self-Healing Loop** automatically diagnoses runtime exceptions and user feedback, generating fix blueprints (`fix_blueprint.txt`) and mutating code autonomously.
 
 ---
 
 ## 🔥 Key Architectural Features
 
-### 1. ⚡ Asynchronous Pipeline Redesign (0.5s Response Latency)
+### 1. ⚡ Asynchronous Pipeline Redesign (5s Response Latency)
 - Replaced synchronous `[Chat ➔ Translation ➔ Furigana]` execution with an **instant chat output pipeline**.
-- Translation and readings (Furigana) are fetched asynchronously in parallel via `Promise.all`, cutting user-perceived latency from **11s down to 0.5s**.
+- Translation and readings (Furigana) are fetched asynchronously in parallel via `Promise.all`, cutting user-perceived latency from **11s down to 5s (54% Reduction)**.
 
 ### 2. 🤖 Local Hermes 0-Cost Background Utility
 - Embedded local **Hermes 3 8B (via Ollama)** to handle heavy background utilities at zero cloud API cost.

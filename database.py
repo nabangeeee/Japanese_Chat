@@ -44,10 +44,17 @@ def init_db():
                 content TEXT NOT NULL,
                 translation TEXT,
                 furigana TEXT,
+                response_time_sec REAL,
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (session_id) REFERENCES sessions (session_id) ON DELETE CASCADE
             )
         """)
+        
+        # Auto-migration: check if response_time_sec column exists
+        cursor.execute("PRAGMA table_info(messages)")
+        cols = [row["name"] for row in cursor.fetchall()]
+        if "response_time_sec" not in cols:
+            cursor.execute("ALTER TABLE messages ADD COLUMN response_time_sec REAL")
         
         # User memories & error notes table
         cursor.execute("""
@@ -168,16 +175,16 @@ def update_session_timestamp(session_id: str):
 
 # --- Message Operations ---
 
-def save_message(msg_id: str, session_id: str, role: str, content: str, translation: Optional[str] = None, furigana: Optional[str] = None, timestamp: Optional[str] = None) -> Dict[str, Any]:
+def save_message(msg_id: str, session_id: str, role: str, content: str, translation: Optional[str] = None, furigana: Optional[str] = None, response_time_sec: Optional[float] = None, timestamp: Optional[str] = None) -> Dict[str, Any]:
     ts = timestamp or datetime.now().isoformat()
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
             """
-            INSERT OR REPLACE INTO messages (id, session_id, role, content, translation, furigana, timestamp)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT OR REPLACE INTO messages (id, session_id, role, content, translation, furigana, response_time_sec, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (msg_id, session_id, role, content, translation, furigana, ts)
+            (msg_id, session_id, role, content, translation, furigana, response_time_sec, ts)
         )
         conn.commit()
     update_session_timestamp(session_id)
@@ -188,6 +195,7 @@ def save_message(msg_id: str, session_id: str, role: str, content: str, translat
         "content": content,
         "translation": translation,
         "furigana": furigana,
+        "response_time_sec": response_time_sec,
         "timestamp": ts
     }
 
