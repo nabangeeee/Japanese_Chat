@@ -298,12 +298,23 @@ def _analyze_feedback_background(api_key: str | None, message_id: str, session_i
         ai_msg = "이전 답장"
         if session_id:
             messages = get_session_messages(session_id)
+            matched_index = -1
             for i, m in enumerate(messages):
-                if m["id"] == message_id:
-                    ai_msg = m["content"]
-                    if i > 0:
-                        user_msg = messages[i-1]["content"]
+                if m["id"] == message_id or message_id in m["id"] or m["id"].endswith(str(message_id)):
+                    matched_index = i
                     break
+            
+            # ID 직관 매칭 실패 시 가장 최근 assistant 메시지 매칭
+            if matched_index == -1:
+                for i in range(len(messages) - 1, -1, -1):
+                    if messages[i]["role"] == "assistant":
+                        matched_index = i
+                        break
+
+            if matched_index != -1:
+                ai_msg = messages[matched_index]["content"]
+                if matched_index > 0:
+                    user_msg = messages[matched_index - 1]["content"]
 
         # 1. Hermes 우선 처리 (0원 연산)
         if is_hermes_available():
@@ -505,15 +516,17 @@ async def api_submit_feedback(req: FeedbackRequest, bg_tasks: BackgroundTasks):
 @app.post("/api/chat")
 @observe(name="gemini_chat")
 async def chat(req: ChatRequest, bg_tasks: BackgroundTasks):
-    if not req.api_key:
-        raise HTTPException(status_code=400, detail="API 키가 필요합니다.")
+    # 프론트에서 api_key가 비어오면 .env 환경변수의 GEMINI_API_KEY 자동 사용
+    effective_api_key = req.api_key or os.getenv("GEMINI_API_KEY")
+
+    if not effective_api_key and not is_hermes_available():
+        raise HTTPException(status_code=400, detail="로컬 Ollama Hermes 구동(ollama serve) 또는 .env의 GEMINI_API_KEY가 필요합니다.")
 
     _assert_no_prompt_injection(req.message)
     _scan_history_for_injection(req.history)
 
     try:
-        client = genai.Client(api_key=req.api_key)
-        
+        start_t = time.time()
         sys_prompt = get_system_prompt(
             req.partner_name, 
             req.difficulty, 
@@ -522,77 +535,75 @@ async def chat(req: ChatRequest, bg_tasks: BackgroundTasks):
             req.roleplay_args,
             req.session_id
         )
-        
-        contents = []
-        for item in req.history[-10:]:
-            role = "user" if item.get("role") == "user" else "model"
-            content = item.get("content", "")
-            if content:
-                contents.append(types.Content(role=role, parts=[types.Part.from_text(text=content)]))
-        
-        contents.append(types.Content(role="user", parts=[types.Part.from_text(text=req.message)]))
-        
-        start_t = time.time()
-        print(f"[Agentic Chat API START] Message: '{req.message}' | Autonomous Tool Calling Enabled")
-        
-        # Agentic Tool Calling Config (질문 맥락에 '검색'이나 '최신', '뉴스'가 포함된 경우에만 Google Search 툴 호출하여 55초 지연 해소)
-        search_keywords = ["검색", "뉴스", "트렌드", "최신", "search", "news", "trend"]
-        needs_search = any(k in req.message.lower() for k in search_keywords)
-        
-        tools = [types.Tool(google_search=types.GoogleSearch())] if needs_search else None
-        config_agentic = types.GenerateContentConfig(
-            system_instruction=sys_prompt,
-            temperature=0.8,
-            max_output_tokens=1000,
-            tools=tools
-        )
-        
+
         raw = ""
-        # 503 과부하 에러 3회 재시도 (Exponential Backoff Auto-Retry)
-        for attempt in range(3):
-            try:
-                response = client.models.generate_content(
-                    model="gemini-3.5-flash",
-                    contents=contents,
-                    config=config_agentic
-                )
-                raw = response.text or ""
-                break
-            except Exception as tool_err:
-                err_msg = str(tool_err)
-                print(f"[Gemini API Attempt {attempt+1}] Warning/Error: {err_msg}")
-                if "503" in err_msg or "UNAVAILABLE" in err_msg:
-                    time.sleep(1.0 * (attempt + 1))
-                    continue
-                
-                # 503 외 에러 시 기본 생성 시도
+        # 1. 로컬 Hermes가 가동 중이면 100% 0원 로컬 모드 최우선 생성 시도
+        if is_hermes_available():
+            print("[Standalone Local Hermes Mode] Generating response with 0-cost Local Hermes LLM...")
+            hermes_prompt = f"{sys_prompt}\n\nUser: {req.message}\nAssistant:"
+            raw = generate_with_hermes(hermes_prompt, system_prompt=sys_prompt, temperature=0.7, max_tokens=600) or ""
+
+        # 2. 로컬 Hermes 미응답 시 Gemini API 자동 폴백
+        if not raw and effective_api_key:
+            client = genai.Client(api_key=effective_api_key)
+            contents = []
+            for item in req.history[-10:]:
+                role = "user" if item.get("role") == "user" else "model"
+                content = item.get("content", "")
+                if content:
+                    contents.append(types.Content(role=role, parts=[types.Part.from_text(text=content)]))
+            
+            contents.append(types.Content(role="user", parts=[types.Part.from_text(text=req.message)]))
+            
+            print(f"[Agentic Chat API START] Message: '{req.message}' | Autonomous Tool Calling Enabled")
+            
+            search_keywords = ["검색", "뉴스", "트렌드", "최신", "search", "news", "trend"]
+            needs_search = any(k in req.message.lower() for k in search_keywords)
+            
+            tools = [types.Tool(google_search=types.GoogleSearch())] if needs_search else None
+            config_agentic = types.GenerateContentConfig(
+                system_instruction=sys_prompt,
+                temperature=0.8,
+                max_output_tokens=1000,
+                tools=tools
+            )
+            
+            # 503 과부하 에러 3회 재시도 (Exponential Backoff Auto-Retry)
+            for attempt in range(3):
                 try:
-                    config_basic = types.GenerateContentConfig(
-                        system_instruction=sys_prompt,
-                        temperature=0.8,
-                        max_output_tokens=1000
-                    )
                     response = client.models.generate_content(
                         model="gemini-3.5-flash",
                         contents=contents,
-                        config=config_basic
+                        config=config_agentic
                     )
                     raw = response.text or ""
                     break
-                except Exception as basic_err:
-                    print(f"[Gemini Basic Attempt {attempt+1}] Failed: {basic_err}")
-                    time.sleep(1.0 * (attempt + 1))
-
-        # 만약 Gemini API가 구글 과부하(503)로 3회 모두 실패했을 때, 로컬 Hermes로 오프라인 0원 무중단 자동 폴백!
-        if not raw and is_hermes_available():
-            print("[Gemini 503 Fallback] Gemini API unavailable due to traffic spike. Falling back to 0-cost Local Hermes 3...")
-            hermes_prompt = f"{sys_prompt}\n\nUser: {req.message}\nAssistant:"
-            raw = generate_with_hermes(hermes_prompt, system_prompt=sys_prompt, temperature=0.7, max_tokens=600) or ""
-            if raw:
-                print("[Gemini 503 Fallback Success] Successfully generated response using Local Hermes!")
+                except Exception as tool_err:
+                    err_msg = str(tool_err)
+                    print(f"[Gemini API Attempt {attempt+1}] Warning/Error: {err_msg}")
+                    if "503" in err_msg or "UNAVAILABLE" in err_msg:
+                        time.sleep(1.0 * (attempt + 1))
+                        continue
+                    
+                    try:
+                        config_basic = types.GenerateContentConfig(
+                            system_instruction=sys_prompt,
+                            temperature=0.8,
+                            max_output_tokens=1000
+                        )
+                        response = client.models.generate_content(
+                            model="gemini-3.5-flash",
+                            contents=contents,
+                            config=config_basic
+                        )
+                        raw = response.text or ""
+                        break
+                    except Exception as basic_err:
+                        print(f"[Gemini Basic Attempt {attempt+1}] Failed: {basic_err}")
+                        time.sleep(1.0 * (attempt + 1))
 
         if not raw:
-            raw = "죄송합니다. 현재 구글 Gemini 서버 트래픽이 폭주 중(503)입니다. 잠시 후 다시 시도해 주세요!"
+            raw = "현재 백엔드 연동에 실패했습니다. 로컬 Ollama(ollama serve) 구동 상태를 확인해 주세요!"
         clean_res = redact_sensitive_output(raw)
         
         elapsed = round(time.time() - start_t, 2)
@@ -619,31 +630,41 @@ async def chat(req: ChatRequest, bg_tasks: BackgroundTasks):
 @app.post("/api/translate")
 @observe(name="gemini_translate")
 async def translate(req: TranslateRequest):
-    if not req.api_key:
-        raise HTTPException(status_code=400, detail="API 키가 필요합니다.")
+    effective_api_key = req.api_key or os.getenv("GEMINI_API_KEY")
+    if not effective_api_key and not is_hermes_available():
+        raise HTTPException(status_code=400, detail="로컬 Ollama Hermes 구동(ollama serve) 또는 .env의 GEMINI_API_KEY가 필요합니다.")
 
     _assert_no_prompt_injection(req.text)
 
     try:
         start_t = time.time()
-        client = genai.Client(api_key=req.api_key)
-        
-        config = types.GenerateContentConfig(
-            system_instruction=TRANSLATE_PROMPT,
-            temperature=0.3,
-            max_output_tokens=1200
-        )
-        
-        response = client.models.generate_content(
-            model="gemini-3.5-flash",
-            contents=req.text,
-            config=config
-        )
-        
+        raw = ""
+        # 1. 로컬 Hermes가 켜져 있으면 100% 0원 로컬 모드로 번역 최우선 생성
+        if is_hermes_available():
+            print("[Standalone Local Hermes Translate Mode] Translating with Local Hermes...")
+            raw = generate_with_hermes(f"다음 일본어 문장을 한국어로 자연스럽게 번역하세요:\n{req.text}", system_prompt=TRANSLATE_PROMPT, temperature=0.2) or ""
+
+        # 2. 로컬 Hermes 미응답 시 Gemini API 폴백
+        if not raw and effective_api_key:
+            try:
+                client = genai.Client(api_key=effective_api_key)
+                config = types.GenerateContentConfig(
+                    system_instruction=TRANSLATE_PROMPT,
+                    temperature=0.3,
+                    max_output_tokens=1200
+                )
+                response = client.models.generate_content(
+                    model="gemini-3.5-flash",
+                    contents=req.text,
+                    config=config
+                )
+                raw = response.text or ""
+            except Exception as e:
+                print(f"[Translate Gemini Error] {e}")
+
         elapsed = time.time() - start_t
         print(f"[Translate API END] Completed in {elapsed:.2f} seconds.")
-        raw = response.text or ""
-        return {"translation": redact_sensitive_output(raw)}
+        return {"translation": redact_sensitive_output(raw or "번역 결과를 불러올 수 없습니다.")}
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -652,31 +673,41 @@ async def translate(req: TranslateRequest):
 @app.post("/api/furigana")
 @observe(name="gemini_furigana")
 async def furigana(req: TranslateRequest):
-    if not req.api_key:
-        raise HTTPException(status_code=400, detail="API 키가 필요합니다.")
+    effective_api_key = req.api_key or os.getenv("GEMINI_API_KEY")
+    if not effective_api_key and not is_hermes_available():
+        raise HTTPException(status_code=400, detail="로컬 Ollama Hermes 구동(ollama serve) 또는 .env의 GEMINI_API_KEY가 필요합니다.")
 
     _assert_no_prompt_injection(req.text)
 
     try:
         start_t = time.time()
-        client = genai.Client(api_key=req.api_key)
-        
-        config = types.GenerateContentConfig(
-            system_instruction=FURIGANA_PROMPT,
-            temperature=0.1,
-            max_output_tokens=1200
-        )
-        
-        response = client.models.generate_content(
-            model="gemini-3.5-flash",
-            contents=req.text,
-            config=config
-        )
-        
+        raw = ""
+        # 1. 로컬 Hermes가 켜져 있으면 100% 0원 로컬 모드로 후리가나 최우선 생성
+        if is_hermes_available():
+            print("[Standalone Local Hermes Furigana Mode] Generating furigana with Local Hermes...")
+            raw = generate_with_hermes(f"다음 일본어 문장에 한자 괄호 후리가나를 추가하세요:\n{req.text}", system_prompt=FURIGANA_PROMPT, temperature=0.1) or ""
+
+        # 2. 로컬 Hermes 미응답 시 Gemini API 폴백
+        if not raw and effective_api_key:
+            try:
+                client = genai.Client(api_key=effective_api_key)
+                config = types.GenerateContentConfig(
+                    system_instruction=FURIGANA_PROMPT,
+                    temperature=0.1,
+                    max_output_tokens=1200
+                )
+                response = client.models.generate_content(
+                    model="gemini-3.5-flash",
+                    contents=req.text,
+                    config=config
+                )
+                raw = response.text or ""
+            except Exception as e:
+                print(f"[Furigana Gemini Error] {e}")
+
         elapsed = time.time() - start_t
         print(f"[Furigana API END] Completed in {elapsed:.2f} seconds.")
-        raw = response.text or ""
-        return {"furigana": redact_sensitive_output(raw)}
+        return {"furigana": redact_sensitive_output(raw or req.text)}
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

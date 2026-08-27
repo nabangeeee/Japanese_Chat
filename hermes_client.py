@@ -8,7 +8,7 @@ import requests
 from typing import Optional, Dict, Any, Tuple
 
 HERMES_API_BASE = os.getenv("HERMES_API_BASE", "http://localhost:11434/v1")
-HERMES_MODEL = os.getenv("HERMES_MODEL", "hermes3:latest")
+HERMES_MODEL = os.getenv("HERMES_MODEL", "hermes3:3b")
 
 
 def is_hermes_available() -> bool:
@@ -21,8 +21,8 @@ def is_hermes_available() -> bool:
         return False
 
 
-def generate_with_hermes(prompt: str, system_prompt: Optional[str] = None, temperature: float = 0.2, max_tokens: int = 400) -> Optional[str]:
-    """Generate completion using local Hermes LLM endpoint."""
+def generate_with_hermes(prompt: str, system_prompt: Optional[str] = None, temperature: float = 0.2, max_tokens: int = 300) -> Optional[str]:
+    """Generate completion using local Hermes LLM endpoint with lightweight memory management."""
     if not is_hermes_available():
         return None
         
@@ -37,10 +37,11 @@ def generate_with_hermes(prompt: str, system_prompt: Optional[str] = None, tempe
             "model": HERMES_MODEL,
             "messages": messages,
             "temperature": temperature,
-            "max_tokens": max_tokens
+            "max_tokens": max_tokens,
+            "keep_alive": "3m"  # 3분 후 메모리 자동 해제하여 맥북 렉 방지
         }
         
-        res = requests.post(url, json=payload, timeout=45)
+        res = requests.post(url, json=payload, timeout=20)
         if res.status_code == 200:
             data = res.json()
             return data["choices"][0]["message"]["content"].strip()

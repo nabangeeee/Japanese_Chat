@@ -140,7 +140,6 @@ function loadSettings() {
 
 // 설정 UI에 적용
 function applySettingsToUI() {
-    document.getElementById('apiKey').value = state.settings.apiKey;
     document.getElementById('partnerName').value = state.settings.partnerName;
     document.getElementById('showTranslation').checked = state.settings.showTranslation;
     document.getElementById('showFurigana').checked = state.settings.showFurigana;
@@ -184,7 +183,6 @@ function updateStatusBar() {
 // 설정 저장
 function saveSettings() {
     try {
-        const apiKeyEl = document.getElementById('apiKey');
         const partnerNameEl = document.getElementById('partnerName');
         const showTransEl = document.getElementById('showTranslation');
         const showFuriEl = document.getElementById('showFurigana');
@@ -205,7 +203,7 @@ function saveSettings() {
         });
 
         state.settings = {
-            apiKey: apiKeyEl ? apiKeyEl.value : (state.settings ? state.settings.apiKey : ''),
+            apiKey: '',
             partnerName: partnerNameEl ? partnerNameEl.value : '유키',
             difficulty: newDifficulty,
             topic: 'free',
@@ -652,10 +650,8 @@ async function submitFeedback(event, messageId, rating) {
         }
         
         let feedbackText = null;
-        if (rating === -1) {
-            feedbackText = prompt('어떤 점이 어색했나요? (예: 영어가 섞임, 너무 딱딱함 등)');
-        }
 
+        // DB에 즉시 100% 피드백 저장 전송
         const res = await fetch('/api/feedback', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -664,12 +660,12 @@ async function submitFeedback(event, messageId, rating) {
                 session_id: state.currentSessionId,
                 rating: rating,
                 feedback_text: feedbackText,
-                api_key: state.settings.apiKey
+                api_key: state.settings ? state.settings.apiKey : ''
             })
         });
         
         if (res.ok) {
-            console.log(`[Feedback System] Feedback ${rating} recorded for message ${messageId}`);
+            console.log(`[Feedback System] Feedback ${rating} successfully recorded in DB for message ${messageId}`);
         }
     } catch (e) {
         console.error('Submit feedback failed:', e);
@@ -709,12 +705,12 @@ async function toggleDetails(messageId) {
         
         const tasks = [];
 
-        if (needsTranslation && state.settings.apiKey) {
+        if (needsTranslation) {
             tasks.push(
                 fetch('/api/translate', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ text: message.content, api_key: state.settings.apiKey })
+                    body: JSON.stringify({ text: message.content, api_key: state.settings.apiKey || '' })
                 })
                 .then(res => res.ok ? res.json() : null)
                 .then(data => { if (data) message.translation = data.translation; })
@@ -722,12 +718,12 @@ async function toggleDetails(messageId) {
             );
         }
 
-        if (needsFurigana && state.settings.apiKey) {
+        if (needsFurigana) {
             tasks.push(
                 fetch('/api/furigana', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ text: message.content, api_key: state.settings.apiKey })
+                    body: JSON.stringify({ text: message.content, api_key: state.settings.apiKey || '' })
                 })
                 .then(res => res.ok ? res.json() : null)
                 .then(data => { if (data) message.furigana = data.furigana; })
@@ -800,14 +796,7 @@ async function sendMessage() {
     state.isLoading = true;
     sendBtn.disabled = true;
     
-    if (!state.settings.apiKey) {
-        alert('Google Gemini API 키를 설정해주세요.');
-        toggleSettings();
-        state.isLoading = false;
-        sendBtn.disabled = false;
-        return;
-    }
-    
+
     // 사용자 메시지 추가
     const userMessage = {
         id: Date.now().toString(),
@@ -861,7 +850,7 @@ async function sendMessage() {
         
         // AI 메시지 생성 후 화면에 100% 즉시 출력
         const assistantMessage = {
-            id: (Date.now() + 1).toString(),
+            id: `ast_${Date.now() + 1}`,
             role: 'assistant',
             content: data.response,
             timestamp: new Date().toISOString()
@@ -908,18 +897,6 @@ function closeSettingsOnOverlay(event) {
     }
 }
 
-function toggleApiKeyVisibility() {
-    const input = document.getElementById('apiKey');
-    const icon = document.getElementById('eyeIcon');
-    
-    if (input.type === 'password') {
-        input.type = 'text';
-        icon.innerHTML = '<path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>';
-    } else {
-        input.type = 'password';
-        icon.innerHTML = '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>';
-    }
-}
 
 function selectDifficulty(btn) {
     document.querySelectorAll('.segment').forEach(b => b.classList.remove('active'));
