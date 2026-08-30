@@ -83,6 +83,28 @@ class MCPGetPromptRequest(BaseModel):
     arguments: dict = {}
 
 
+def clean_furigana_text(text: str) -> str:
+    if not text:
+        return text
+    # 1. Remove Romaji / English alphabet inside parentheses like (ohayou-ookyoharucchushi...)
+    text = re.sub(r'\([a-zA-Z\s\-\.\,\?!]+\)', '', text)
+    # 2. Remove duplicated Hiragana parenthesis if it matches preceding hiragana, e.g. おはよう(おはよう) -> おはよう
+    text = re.sub(r'([ぁ-んァ-ヶ]+)\(\1\)', r'\1', text)
+    # 3. Clean any remaining raw English artifacts
+    text = re.sub(r'[a-zA-Z]{3,}', '', text)
+    return text.strip()
+
+
+def clean_translation_text(text: str) -> str:
+    if not text:
+        return text
+    # Clean common English artifact words if leaked into Korean
+    text = re.sub(r'\b(greetings|Shopsinside|Shop|Sentence|greetings이|greetings가|greetings을)\b', '', text, flags=re.IGNORECASE)
+    # Clean double spaces
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
+
+
 def _assert_no_prompt_injection(text: str) -> None:
     code = scan_prompt_injection(text)
     if code:
@@ -335,15 +357,15 @@ def _analyze_feedback_background(api_key: str | None, message_id: str, session_i
         # 2. Gemini 폴백
         if api_key:
             client = genai.Client(api_key=api_key)
-            prompt = f"""다음 대화에서 사용자가 AI 답장에 대해 👎(싫어요) 부정적 피드백을 남겼습니다.
-이유/의견: {feedback_text or '어색하거나 비자연스러운 표현'}
+            prompt = f"""The user gave a 👎 (dislike) feedback to the AI response in a Japanese conversation.
+Feedback Reason: {feedback_text or 'Awkward or unnatural phrasing'}
 
-사용자 질문: {user_msg}
-AI 기존 답장: {ai_msg}
+User Message: {user_msg}
+AI Response: {ai_msg}
 
-이 피드백을 바탕으로 향후 대화 시 금지하거나 개선해야 할 지침 규칙 1문장을 한국어로 작성하세요.
+Based on this feedback, write EXACTLY ONE 1-sentence actionable refinement rule in Korean stating what to avoid or improve in future responses.
 Format:
-RULE: (향후 대화 시 피해야 할 구체적 규칙 1문장)"""
+RULE: (1-sentence rule in Korean)"""
 
             res = client.models.generate_content(
                 model="gemini-3.5-flash",
@@ -664,7 +686,8 @@ async def translate(req: TranslateRequest):
 
         elapsed = time.time() - start_t
         print(f"[Translate API END] Completed in {elapsed:.2f} seconds.")
-        return {"translation": redact_sensitive_output(raw or "번역 결과를 불러올 수 없습니다.")}
+        clean_tr = clean_translation_text(redact_sensitive_output(raw or "번역 결과를 불러올 수 없습니다."))
+        return {"translation": clean_tr}
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -707,7 +730,8 @@ async def furigana(req: TranslateRequest):
 
         elapsed = time.time() - start_t
         print(f"[Furigana API END] Completed in {elapsed:.2f} seconds.")
-        return {"furigana": redact_sensitive_output(raw or req.text)}
+        clean_furi = clean_furigana_text(redact_sensitive_output(raw or req.text))
+        return {"furigana": clean_furi}
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -720,27 +744,26 @@ async def furigana(req: TranslateRequest):
 # Difficulty Prompts
 BEGINNER_PROMPT = """
 # Difficulty: Beginner
-# Persona: You are a Japanese friend of a Korean person learning Japanese. Please speak in easy Japanese at a kindergarten level.
-- Use simple words and short sentences (1-2 sentences).
+# Persona: You are a friendly Japanese friend talking to a beginner Japanese learner.
+- Speak in EASY, SHORT, and CONCISE Japanese (1-2 sentences maximum, under 30 characters).
 - Use polite form (です・ます form).
-- Use basic kanji and hiragana.
+- Speak naturally like a real human friend, NOT a robotic textbook or formal speaker.
 """
 
 INTERMEDIATE_PROMPT = """
 # Difficulty: Intermediate
-# Persona: You are a Japanese friend of a Korean person learning Japanese. Please speak in natural Japanese at a middle school level.
-- Use everyday conversational expressions (2-3 sentences).
-- Use common kanji appropriately.
-- Use polite and casual speech depending on the context.
-- Gently guide grammar mistakes to natural expressions.
+# Persona: You are a Japanese friend talking to an intermediate Japanese learner.
+- Speak in natural, everyday conversational Japanese (1-2 sentences maximum, under 50 characters).
+- Keep your reply BRIEF, casual, and friendly. Do NOT output long robotic speeches.
+- Use natural native phrasing.
 """
 
 ADVANCED_PROMPT = """
 # Difficulty: Advanced
-# Persona: You are a Japanese friend of a Korean person learning Japanese. Please speak in natural and sophisticated Japanese at a high school/adult level.
-- Use native-level expressions, idioms, and slang.
-- Include business expressions and honorifics (敬語) when appropriate.
-- Suggest subtle natural nuances.
+# Persona: You are a Japanese friend talking to an advanced Japanese learner.
+- Speak in natural, native-level Japanese (1-2 sentences maximum, under 60 characters).
+- Keep your response CONCISE and conversational.
+- Use native idioms and natural expressions.
 """
 
 DIFFICULTY_PROMPTS = {
@@ -770,16 +793,17 @@ SYSTEM_PROMPT_TEMPLATE = """Your name is "{partner_name}". You are a Japanese pe
 
 Conversation Topic: {topic_prompt}
 
-CRITICAL FORMATTING RULE:
+CRITICAL CONVERSATIONAL RULES:
+- Keep your reply SHORT, CONCISE, and NATURAL (1-2 sentences maximum).
+- Speak like a real Japanese friend in a messaging app. ABSOLUTELY NO long formal speeches, textbook explanations, or weird literal translations!
+- Ensure 100% fluent native Japanese grammar.
 - NEVER include bracketed furigana/readings like 過ご(すご)す or 今日(きょう) in your main conversation response!
 - Output ONLY clean, natural Japanese text without any parenthetical readings.
 
 Important Rules:
 - Have a natural conversation like a friend with a Korean Japanese learner
-- Occasionally ask questions to keep the conversation going
-- If the other person's Japanese is incorrect, naturally respond with the correct expression
-- Use emojis moderately to create a friendly atmosphere
-- Always respond in Japanese"""
+- Occasionally ask a short question to keep the conversation going
+- Always respond in natural Japanese"""
 
 # --------------------------------------------------------------------------------------
 
@@ -787,7 +811,8 @@ Important Rules:
 TRANSLATE_PROMPT = """You are an expert Japanese-to-Korean translator.
 Translate the provided Japanese text into natural, fluent, and polite Korean.
 CRITICAL INSTRUCTIONS:
-- Translate 100% of the input text from start to finish without omitting or truncating any sentences.
+- Translate 100% into pure, natural Korean.
+- ABSOLUTELY NO English words (such as 'greetings', 'Shopsinside', etc.) or English alphabet allowed in the Korean output!
 - Do NOT output any English explanations, notes, grammatical breakdown, or formatting markers (*, Sentence, etc.).
 - Output ONLY the clean, final Korean translation text."""
 
@@ -797,9 +822,9 @@ CRITICAL INSTRUCTIONS:
 FURIGANA_PROMPT = """You are a Japanese linguistics expert.
 Add hiragana furigana readings in parentheses directly after every Kanji (漢字) in the provided Japanese text.
 CRITICAL INSTRUCTIONS:
-- Preserve 100% of the original Japanese text structure from start to finish without truncating or omitting any words.
-- Add parentheses ONLY after Kanji (漢字). Do NOT add parentheses to Hiragana, Katakana, punctuation, or emojis.
-- Do NOT include any English explanations, grammatical commentary, or notes.
+- Parentheses MUST contain ONLY pure Hiragana (ひらがな).
+- ABSOLUTELY NO Romaji / English alphabet (such as 'ohayou', 'teinai', 'greetings') or English explanations allowed!
+- Do NOT add parentheses to Hiragana words (e.g. do NOT write おはよう(おはよう)). Add parentheses ONLY directly after Kanji (漢字).
 - Output Format Example: 店内(てんない)でお召(め)し上(あ)がりですか、それともお持(も)ち帰(かえ)りですか？"""
 
 # --------------------------------------------------------------------------------------

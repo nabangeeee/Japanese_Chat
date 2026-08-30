@@ -52,17 +52,17 @@ def generate_with_hermes(prompt: str, system_prompt: Optional[str] = None, tempe
 
 
 def extract_grammar_errors_with_hermes(user_text: str, ai_text: str) -> Optional[Tuple[str, str, str]]:
-    """Extract grammar error note using Hermes model."""
-    prompt = f"""다음 일본어 대화에서 사용자의 문법/어휘 실수를 AI가 교정해 준 경우 오답 노트 항목을 작성하세요.
-실수가 없다면 NONE을 출력하세요.
+    """Extract grammar error note using Hermes model with 100% English prompt."""
+    prompt = f"""Analyze the Japanese dialogue below. If the user made a grammar/vocabulary mistake and the AI corrected it, extract a grammar error item.
+If there is no user error, output ONLY: NONE
 
-Format (실수가 있을 때만):
-ORIGINAL: (사용자가 실수한 틀린 문장)
-CORRECTED: (올바른 정답 일본어 문장)
-EXPLANATION: (한국어로 1문장 쉬운 문법 교정 설명)
+Format (ONLY if error exists):
+ORIGINAL: (User's incorrect Japanese sentence)
+CORRECTED: (Corrected Japanese sentence)
+EXPLANATION: (1-sentence easy grammar explanation in Korean)
 
-사용자: {user_text}
-AI 답장: {ai_text}"""
+User: {user_text}
+AI Response: {ai_text}"""
 
     system_prompt = "You are a Japanese grammar expert assistant. Analyze dialogue errors accurately."
     out = generate_with_hermes(prompt, system_prompt=system_prompt, temperature=0.1)
@@ -84,14 +84,14 @@ AI 답장: {ai_text}"""
 
 
 def summarize_session_with_hermes(dialogue_text: str) -> Tuple[Optional[str], Dict[str, str]]:
-    """Summarize session dialogue and extract learner facts using Hermes model."""
-    prompt = f"""Summarize the following Japanese conversation in 100% fluent Korean.
+    """Summarize session dialogue and extract learner facts using Hermes model with 100% English prompt."""
+    prompt = f"""Summarize the following Japanese conversation into natural Korean.
 CRITICAL INSTRUCTIONS:
-- Translate ALL Japanese words into natural Korean. Absolutely NO Japanese characters (Hiragana, Katakana, Kanji) allowed in the summary! (e.g., translate おすすめ as 추천).
-- Output ONLY the Korean summary and learner facts in the exact format below.
+- Translate ALL Japanese words into natural Korean in the summary text. Absolutely NO Japanese characters (Hiragana, Katakana, Kanji) allowed!
+- Output ONLY in the exact format below.
 
 Format:
-SUMMARY: (Summary of dialogue in 100% natural Korean, 2 sentences max)
+SUMMARY: (Summary of dialogue in natural Korean, 2 sentences max)
 FACTS: (Learner facts in key=value format, or NONE)
 
 Dialogue Text:
@@ -121,19 +121,19 @@ Dialogue Text:
 
 
 def analyze_feedback_with_hermes(user_text: str, ai_text: str, rating: int, feedback_text: Optional[str] = None) -> Optional[str]:
-    """Analyze human dislike feedback (-1) using Hermes agent and extract refined prompt rule."""
+    """Analyze human dislike feedback (-1) using Hermes agent with 100% English prompt."""
     if rating != -1:
         return None
         
-    prompt = f"""다음 대화에서 사용자가 AI 답장에 대해 👎(싫어요) 부정적 피드백을 남겼습니다.
-이유/의견: {feedback_text or '어색하거나 비자연스러운 표현'}
+    prompt = f"""The user gave a 👎 (dislike) feedback to the AI response in a Japanese conversation.
+Feedback Reason: {feedback_text or 'Awkward or unnatural phrasing'}
 
-사용자 질문: {user_text}
-AI 기존 답장: {ai_text}
+User Message: {user_text}
+AI Response: {ai_text}
 
-이 피드백을 바탕으로 향후 대화 시 금지하거나 개선해야 할 지침 규칙 1문장을 한국어로 작성하세요.
+Based on this feedback, write EXACTLY ONE 1-sentence actionable refinement rule in Korean stating what to avoid or improve in future responses.
 Format:
-RULE: (향후 대화 시 피해야 할 구체적 규칙 1문장)"""
+RULE: (1-sentence rule in Korean)"""
 
     system_prompt = "You are an AI refinement agent analyzing human feedback to improve Japanese dialogue response quality."
     out = generate_with_hermes(prompt, system_prompt=system_prompt, temperature=0.1)
@@ -148,7 +148,7 @@ RULE: (향후 대화 시 피해야 할 구체적 규칙 1문장)"""
 
 
 def self_critique_response_with_hermes(user_text: str, ai_text: str) -> Optional[str]:
-    """Act as LLM-as-a-Judge using 0-cost local Hermes to evaluate Japanese dialogue naturalness & roleplay fidelity."""
+    """Act as LLM-as-a-Judge using 0-cost local Hermes with 100% English prompt."""
     prompt = f"""You are an elite Japanese Dialogue Quality Auditor (LLM-as-a-Judge).
 Evaluate the following AI response in a Japanese conversation/roleplay setting.
 
@@ -157,8 +157,8 @@ Evaluate the following AI response in a Japanese conversation/roleplay setting.
 
 AUDIT CHECKLIST:
 1. Is the Japanese phrasing 100% natural for a native speaker?
-2. Does it avoid unnatural parrot-repetition (e.g. repeating 'をお願いします' back to a customer)?
-3. Does it strictly adhere to the role (e.g. cafe staff / airport agent)?
+2. Does it avoid unnatural parrot-repetition back to the user?
+3. Does it strictly adhere to the role (e.g. cafe staff / airport agent / friend)?
 4. Is it free from awkward literal translations or weird grammar?
 
 CRITICAL OUTPUT RULES:
@@ -166,7 +166,7 @@ CRITICAL OUTPUT RULES:
 - If there is ANY flaw, output EXACTLY ONE actionable instruction in Korean for future responses starting with 'RULE:'.
 
 Example output for flaw:
-RULE: 손님이 '店内でお召し上がり'를 언급할 때는 'をお願いします'라고 되뇌지 말고 '店内でお召し上がりですね' 또는 'かしこまりました'로 정중히 수긍하세요.
+RULE: 손님의 표현을 어색하게 그대로 되뇌지 말고 자연스러운 응답 표현을 사용하세요.
 
 Audit Result:"""
 
