@@ -45,9 +45,9 @@ FIX_BLUEPRINT: (수정해야 할 구체적 지침)"""
     system_prompt = "You are a senior devops diagnosis agent using Hermes LLM. Create precise bug fix blueprints."
     
     if is_hermes_available():
-        out = generate_with_hermes(prompt, system_prompt=system_prompt, temperature=0.1)
+        out = generate_with_hermes(prompt, system_prompt=system_prompt, temperature=0.1, model_override="hermes3:3b")
         if out:
-            print("[Hermes Agent] Local 0-cost diagnosis complete.")
+            print("[Hermes Agent] Local 0-cost Hermes code diagnosis complete.")
             return out
 
     return "DIAGNOSIS: Syntax or runtime logic error detected.\nFIX_BLUEPRINT: Resolve the traceback exception in the code."

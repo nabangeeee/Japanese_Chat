@@ -22,4 +22,7 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
-
+# SQLite DB & Scratch
+*.db
+nihongo_chat.db
+scratch/

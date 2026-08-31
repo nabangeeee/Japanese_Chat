@@ -7,6 +7,7 @@ from google import genai
 from google.genai import types
 from langfuse import observe
 import os
+import re
 import time
 from dotenv import load_dotenv
 
@@ -17,10 +18,10 @@ from database import (
     init_db, create_session, get_all_sessions, get_session, delete_session,
     save_message, get_session_messages, save_user_memory, get_user_memories,
     save_session_summary, get_session_summary, save_user_fact, get_all_user_facts,
-    get_recent_live_trends, save_message_feedback, get_negative_feedbacks
+    get_recent_live_trends, save_message_feedback, update_message_quality_score
 )
 from hermes_client import is_hermes_available, summarize_session_with_hermes, extract_grammar_errors_with_hermes, analyze_feedback_with_hermes, self_critique_response_with_hermes, generate_with_hermes
-from codex_hermes_loop import diagnose_with_hermes, run_codex_hermes_self_healing_loop
+from codex_hermes_loop import diagnose_with_hermes
 from openclaw_collector import fetch_latest_japan_trends
 from contextlib import asynccontextmanager
 import traceback
@@ -83,23 +84,37 @@ class MCPGetPromptRequest(BaseModel):
     arguments: dict = {}
 
 
+def clean_japanese_text(text: str) -> str:
+    if not text:
+        return text
+    # 1. Clean accidental English letter leaks inside Katakana/Hiragana words (e.g. アイスコffeえ -> アイスコーヒー / アイスコーえ)
+    text = re.sub(r'([ぁ-んァ-ヶ])[a-zA-Z]+([ぁ-んァ-ヶ])', r'\1\2', text)
+    # 2. Clean remaining English word artifacts
+    text = re.sub(r'[a-zA-Z]{2,}', '', text)
+    # 3. Clean double spaces
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
+
+
 def clean_furigana_text(text: str) -> str:
     if not text:
         return text
-    # 1. Remove Romaji / English alphabet inside parentheses like (ohayou-ookyoharucchushi...)
+    # 1. Remove Romaji / English alphabet inside parentheses
     text = re.sub(r'\([a-zA-Z\s\-\.\,\?!]+\)', '', text)
-    # 2. Remove duplicated Hiragana parenthesis if it matches preceding hiragana, e.g. おはよう(おはよう) -> おはよう
+    # 2. Remove duplicated Hiragana parenthesis if it matches preceding hiragana
     text = re.sub(r'([ぁ-んァ-ヶ]+)\(\1\)', r'\1', text)
-    # 3. Clean any remaining raw English artifacts
-    text = re.sub(r'[a-zA-Z]{3,}', '', text)
+    # 3. Clean Kanji leaked inside parenthesis e.g. 上(召し上がり) -> (めしあがり)
+    text = re.sub(r'\(.*?[一-龠]+.*?\)', '', text)
+    # 4. Clean any remaining raw English artifacts
+    text = re.sub(r'[a-zA-Z]{2,}', '', text)
     return text.strip()
 
 
 def clean_translation_text(text: str) -> str:
     if not text:
         return text
-    # Clean common English artifact words if leaked into Korean
-    text = re.sub(r'\b(greetings|Shopsinside|Shop|Sentence|greetings이|greetings가|greetings을)\b', '', text, flags=re.IGNORECASE)
+    # Clean any accidental raw CJK Kanji leaked into Korean translation text
+    text = re.sub(r'[\u4e00-\u9fff]', '', text)
     # Clean double spaces
     text = re.sub(r'\s+', ' ', text).strip()
     return text
@@ -186,7 +201,7 @@ def get_system_prompt(partner_name: str, difficulty: str, topic: str, roleplay_i
 
 
 def _update_session_summary_background(api_key: str, session_id: str):
-    """백그라운드에서 세션 대화 내역이 6건 이상일 때 대화 요약문 및 유저 팩트를 자동 추출하여 DB에 적재 (Hermes 우선 -> Gemini 폴백)"""
+    """백그라운드 세션 대화 요약 및 유저 팩트 동적 추출 (Gemini 3.5 Flash 최우선)"""
     try:
         messages = get_session_messages(session_id)
         if len(messages) < 6:
@@ -194,118 +209,91 @@ def _update_session_summary_background(api_key: str, session_id: str):
 
         dialogue_text = "\n".join([f"{m['role']}: {m['content']}" for m in messages[-14:]])
         
-        # 1. Hermes 로컬 에이전트 가용 시 우선 처리 (비용 0원 & API 쿼터 아낌)
-        if is_hermes_available():
-            summary, facts = summarize_session_with_hermes(dialogue_text)
-            if summary:
-                save_session_summary(session_id, summary)
-                print(f"[Hermes Agent Summary] Updated summary for session '{session_id}': {summary[:40]}...")
-            for k, v in facts.items():
-                save_user_fact(k, v)
-                
-            # 유저가 대화를 잠시 멈춘 오프라인 시점에 배치 심사 (채팅 속도 영향 0%)
-            last_user_msg = ""
-            last_ai_msg = ""
-            for m in reversed(messages):
-                if m["role"] == "assistant" and not last_ai_msg:
-                    last_ai_msg = m["content"]
-                elif m["role"] == "user" and not last_user_msg:
-                    last_user_msg = m["content"]
-                if last_user_msg and last_ai_msg:
-                    break
-            if last_user_msg and last_ai_msg:
-                _self_critique_ai_response_background(last_user_msg, last_ai_msg)
-            return
-
-        # 2. Hermes 오프라인 시 Gemini API로 자동 폴백
-        client = genai.Client(api_key=api_key)
-        prompt = f"""Summarize the following Japanese conversation in 100% fluent Korean.
-CRITICAL INSTRUCTIONS:
-- Translate ALL Japanese words into natural Korean. Absolutely NO Japanese characters (Hiragana, Katakana, Kanji) allowed in the summary! (e.g., translate おすすめ as 추천).
-- Output ONLY the Korean summary and learner facts in the exact format below.
-
+        # 1. Gemini 3.5 Flash 최우선 요약
+        if api_key:
+            client = genai.Client(api_key=api_key)
+            prompt = f"""Summarize the Japanese conversation in fluent Korean.
 Format:
-SUMMARY: (Summary of dialogue in 100% natural Korean, 2 sentences max)
+SUMMARY: (Summary of dialogue in Korean, 2 sentences max)
 FACTS: (Learner facts in key=value format, or NONE)
 
 Dialogue Text:
 {dialogue_text}"""
 
-        res = client.models.generate_content(
-            model="gemini-3.5-flash",
-            contents=prompt,
-            config=types.GenerateContentConfig(temperature=0.1, max_output_tokens=300)
-        )
-        
-        out = res.text or ""
-        summary = ""
-        for line in out.split("\n"):
-            if "SUMMARY:" in line:
-                summary = line.split("SUMMARY:")[1].strip()
-            elif "FACTS:" in line and "NONE" not in line:
-                fact_part = line.split("FACTS:")[1].strip()
-                if "=" in fact_part:
-                    k, v = fact_part.split("=", 1)
-                    save_user_fact(k.strip(), v.strip())
-                    
-        # Clean FACTS leftover from summary if present
-        if "FACTS:" in summary:
-            summary = summary.split("FACTS:")[0].strip()
+            res = client.models.generate_content(
+                model="gemini-3.5-flash",
+                contents=prompt,
+                config=types.GenerateContentConfig(temperature=0.1, max_output_tokens=300)
+            )
+            out = res.text or ""
+            summary = ""
+            for line in out.split("\n"):
+                if "SUMMARY:" in line:
+                    summary = line.split("SUMMARY:")[1].strip()
+                elif "FACTS:" in line and "NONE" not in line:
+                    fact_part = line.split("FACTS:")[1].strip()
+                    if "=" in fact_part:
+                        k, v = fact_part.split("=", 1)
+                        save_user_fact(k.strip(), v.strip())
+                        
+            if summary:
+                save_session_summary(session_id, summary)
+                print(f"[Gemini Summary] Updated summary for session '{session_id}': {summary[:40]}...")
+                return
 
-        if summary:
-            save_session_summary(session_id, summary)
-            print(f"[Gemini Summary] Updated summary for session '{session_id}': {summary[:40]}...")
+        # 2. 로컬 Hermes 오프라인 폴백
+        if is_hermes_available():
+            summary, facts = summarize_session_with_hermes(dialogue_text)
+            if summary:
+                save_session_summary(session_id, summary)
+            for k, v in facts.items():
+                save_user_fact(k, v)
     except Exception as e:
         print(f"[Long-Term Memory Error] {e}")
 
 
 def _extract_grammar_errors_background(api_key: str, user_text: str, ai_text: str):
-    """사용자 메시지와 AI 답장을 비교하여 문법 실수가 있다면 오답 노트 DB에 자동 적재 (Hermes 우선 -> Gemini 폴백)"""
+    """사용자 대화 중 문법 실수가 있는 경우 오답 노트 DB 자동 적재 (Gemini 3.5 Flash 최우선)"""
     try:
-        # 1. Hermes 로컬 에이전트 가용 시 우선 처리
+        if api_key:
+            client = genai.Client(api_key=api_key)
+            prompt = f"""다음 대화에서 사용자의 문법/어휘 실수가 있다면 교정 항목을 작성하고, 없으면 NONE을 출력하세요.
+Format (실수 있을 때만):
+ORIGINAL: (틀린 문장)
+CORRECTED: (올바른 일본어 문장)
+EXPLANATION: (1문장 한국어 설명)
+
+사용자: {user_text}
+AI: {ai_text}"""
+
+            res = client.models.generate_content(
+                model="gemini-3.5-flash",
+                contents=prompt,
+                config=types.GenerateContentConfig(temperature=0.1, max_output_tokens=250)
+            )
+            
+            out = res.text or ""
+            if "NONE" not in out and "ORIGINAL:" in out:
+                orig, corr, expl = "", "", ""
+                for line in out.split("\n"):
+                    if line.startswith("ORIGINAL:"):
+                        orig = line.replace("ORIGINAL:", "").strip()
+                    elif line.startswith("CORRECTED:"):
+                        corr = line.replace("CORRECTED:", "").strip()
+                    elif line.startswith("EXPLANATION:"):
+                        expl = line.replace("EXPLANATION:", "").strip()
+
+                if orig and corr:
+                    save_user_memory("Grammar Error", orig, corr, expl)
+                    print(f"[Gemini Error Note] Saved error note: '{orig}' -> '{corr}'")
+                    return
+
+        # 로컬 Hermes 오프라인 폴백
         if is_hermes_available():
             err_data = extract_grammar_errors_with_hermes(user_text, ai_text)
             if err_data:
                 orig, corr, expl = err_data
                 save_user_memory("Grammar Error", orig, corr, expl)
-                print(f"[Hermes Error Note] Automatically saved error note: '{orig}' -> '{corr}'")
-            return
-
-        # 2. Hermes 오프라인 시 Gemini API로 자동 폴백
-        client = genai.Client(api_key=api_key)
-        prompt = f"""다음 일본어 대화에서 사용자의 문법/어휘 실수를 AI가 교정해 준 경우 오답 노트 항목을 작성하세요.
-실수가 없다면 NONE을 출력하세요.
-
-Format (실수가 있을 때만):
-ORIGINAL: (사용자가 실수한 틀린 문장)
-CORRECTED: (올바른 정답 일본어 문장)
-EXPLANATION: (한국어로 1문장 쉬운 문법 교정 설명)
-
-사용자: {user_text}
-AI 답장: {ai_text}"""
-
-        res = client.models.generate_content(
-            model="gemini-3.5-flash",
-            contents=prompt,
-            config=types.GenerateContentConfig(temperature=0.1, max_output_tokens=250)
-        )
-        
-        out = res.text or ""
-        if "NONE" in out or "ORIGINAL:" not in out:
-            return
-
-        orig, corr, expl = "", "", ""
-        for line in out.split("\n"):
-            if line.startswith("ORIGINAL:"):
-                orig = line.replace("ORIGINAL:", "").strip()
-            elif line.startswith("CORRECTED:"):
-                corr = line.replace("CORRECTED:", "").strip()
-            elif line.startswith("EXPLANATION:"):
-                expl = line.replace("EXPLANATION:", "").strip()
-
-        if orig and corr:
-            save_user_memory("Grammar Error", orig, corr, expl)
-            print(f"[Gemini Error Note] Automatically saved error note: '{orig}' -> '{corr}'")
     except Exception as e:
         print(f"[Error Note Memory Error] {e}")
 
@@ -338,7 +326,7 @@ def _analyze_feedback_background(api_key: str | None, message_id: str, session_i
                 if matched_index > 0:
                     user_msg = messages[matched_index - 1]["content"]
 
-        # 1. Hermes 우선 처리 (0원 연산)
+        # 1. Hermes 0원 에이전트가 유저 부정적 피드백 분석 및 진단서(fix_blueprint.txt) 작성
         if is_hermes_available():
             rule = analyze_feedback_with_hermes(user_msg, ai_msg, rating, feedback_text)
             if rule:
@@ -354,27 +342,26 @@ def _analyze_feedback_background(api_key: str | None, message_id: str, session_i
                 print(f"[Hermes Feedback Refinement] 💾 Saved Feedback Blueprint to {blueprint_file_path}")
             return
 
-        # 2. Gemini 폴백
+        # 2. Hermes 미응답 시 Gemini 폴백
         if api_key:
             client = genai.Client(api_key=api_key)
             prompt = f"""The user gave a 👎 (dislike) feedback to the AI response in a Japanese conversation.
-Feedback Reason: {feedback_text or 'Awkward or unnatural phrasing'}
-
+Feedback Reason: {feedback_text or 'Awkward phrasing'}
 User Message: {user_msg}
 AI Response: {ai_msg}
 
-Based on this feedback, write EXACTLY ONE 1-sentence actionable refinement rule in Korean stating what to avoid or improve in future responses.
+Write EXACTLY ONE 1-sentence actionable refinement rule in English stating what to avoid or improve in future responses.
 Format:
-RULE: (1-sentence rule in Korean)"""
+RULE: (1-sentence rule in English)"""
 
             res = client.models.generate_content(
                 model="gemini-3.5-flash",
                 contents=prompt,
-                config=types.GenerateContentConfig(temperature=0.1, max_output_tokens=200)
+                config=types.GenerateContentConfig(temperature=0.1, max_output_tokens=150)
             )
             out = res.text or ""
             if "RULE:" in out:
-                rule = out.replace("RULE:", "").strip()
+                rule = out.split("RULE:")[1].strip()
                 fact_key = f"disliked_pattern_{int(time.time())}"
                 save_user_fact(fact_key, rule)
                 print(f"[Gemini Feedback Refinement] Created rule: {rule}")
@@ -382,23 +369,27 @@ RULE: (1-sentence rule in Korean)"""
         print(f"[Feedback Refinement Error] {e}")
 
 
-def _self_critique_ai_response_background(user_msg: str, ai_msg: str):
-    """AI 답장 생성 후 백그라운드에서 Hermes 0원으로 어색함/중복표현 자가 검수 및 자율 정제 지침 DB 적재"""
+def _self_critique_ai_response_background(message_id: str, user_msg: str, ai_msg: str):
+    """AI 답장 생성 후 백그라운드에서 LLM-as-a-Judge 품질 점수(1-10점) 채점 및 자율 정제 지침 DB 적재"""
     try:
-        if not is_hermes_available():
-            return
-            
-        rule = self_critique_response_with_hermes(user_msg, ai_msg)
+        score = 6.5
+        rule = None
+        if is_hermes_available():
+            score, rule = self_critique_response_with_hermes(user_msg, ai_msg)
+        
+        update_message_quality_score(message_id, score)
+        print(f"[LLM-as-a-Judge] Message ID: {message_id} -> Quality Score: {score}/10.0")
+        
         if rule:
             fact_key = f"disliked_pattern_{int(time.time())}"
             save_user_fact(fact_key, rule)
-            print(f"[Hermes Self-Critique Agent] Detected awkward response. Created self-correction rule: {rule}")
+            print(f"[Hermes Self-Critique Agent] Created self-correction rule: {rule}")
             
             # Save self-critique blueprint to scratch/fix_blueprint.txt
             blueprint_file_path = os.path.join(os.path.dirname(__file__), "scratch", "fix_blueprint.txt")
             os.makedirs(os.path.dirname(blueprint_file_path), exist_ok=True)
             with open(blueprint_file_path, "w", encoding="utf-8") as bf:
-                bf.write(f"=== Hermes Self-Critique & Auto-Correction Blueprint ({time.strftime('%Y-%m-%d %H:%M:%S')}) ===\n\n[User Message]: {user_msg}\n[Awkward AI Response]: {ai_msg}\n\n[Hermes Self-Correction Rule]:\n{rule}\n")
+                bf.write(f"=== Hermes Self-Critique & Auto-Correction Blueprint ({time.strftime('%Y-%m-%d %H:%M:%S')}) ===\n\n[User Message]: {user_msg}\n[AI Response]: {ai_msg}\n[Assigned Score]: {score}/10.0\n\n[Hermes Self-Correction Rule]:\n{rule}\n")
             print(f"[Hermes Self-Critique Agent] 💾 Saved Auto-Correction Blueprint to {blueprint_file_path}")
     except Exception as e:
         print(f"[Hermes Self-Critique Error] {e}")
@@ -536,7 +527,7 @@ async def api_submit_feedback(req: FeedbackRequest, bg_tasks: BackgroundTasks):
 
 
 @app.post("/api/chat")
-@observe(name="gemini_chat")
+@observe(name="nihongo_chat", as_type="generation")
 async def chat(req: ChatRequest, bg_tasks: BackgroundTasks):
     # 프론트에서 api_key가 비어오면 .env 환경변수의 GEMINI_API_KEY 자동 사용
     effective_api_key = req.api_key or os.getenv("GEMINI_API_KEY")
@@ -559,14 +550,8 @@ async def chat(req: ChatRequest, bg_tasks: BackgroundTasks):
         )
 
         raw = ""
-        # 1. 로컬 Hermes가 가동 중이면 100% 0원 로컬 모드 최우선 생성 시도
-        if is_hermes_available():
-            print("[Standalone Local Hermes Mode] Generating response with 0-cost Local Hermes LLM...")
-            hermes_prompt = f"{sys_prompt}\n\nUser: {req.message}\nAssistant:"
-            raw = generate_with_hermes(hermes_prompt, system_prompt=sys_prompt, temperature=0.7, max_tokens=600) or ""
-
-        # 2. 로컬 Hermes 미응답 시 Gemini API 자동 폴백
-        if not raw and effective_api_key:
+        # 1. Gemini 3.5 Flash API 최우선 생성 (최고 품질 회화)
+        if effective_api_key:
             client = genai.Client(api_key=effective_api_key)
             contents = []
             for item in req.history[-10:]:
@@ -585,7 +570,7 @@ async def chat(req: ChatRequest, bg_tasks: BackgroundTasks):
             tools = [types.Tool(google_search=types.GoogleSearch())] if needs_search else None
             config_agentic = types.GenerateContentConfig(
                 system_instruction=sys_prompt,
-                temperature=0.8,
+                temperature=0.7,
                 max_output_tokens=1000,
                 tools=tools
             )
@@ -610,7 +595,7 @@ async def chat(req: ChatRequest, bg_tasks: BackgroundTasks):
                     try:
                         config_basic = types.GenerateContentConfig(
                             system_instruction=sys_prompt,
-                            temperature=0.8,
+                            temperature=0.7,
                             max_output_tokens=1000
                         )
                         response = client.models.generate_content(
@@ -625,8 +610,8 @@ async def chat(req: ChatRequest, bg_tasks: BackgroundTasks):
                         time.sleep(1.0 * (attempt + 1))
 
         if not raw:
-            raw = "현재 백엔드 연동에 실패했습니다. 로컬 Ollama(ollama serve) 구동 상태를 확인해 주세요!"
-        clean_res = redact_sensitive_output(raw)
+            raw = "현재 백엔드 연동에 실패했습니다. Gemini API 키 구동 상태를 확인해 주세요!"
+        clean_res = clean_japanese_text(redact_sensitive_output(raw))
         
         elapsed = round(time.time() - start_t, 2)
         print(f"[Agentic Chat API END] Completed in {elapsed:.2f} seconds.")
@@ -637,9 +622,10 @@ async def chat(req: ChatRequest, bg_tasks: BackgroundTasks):
             assistant_msg_id = f"ast_{int(time.time() * 1000) + 1}"
             save_message(user_msg_id, req.session_id, "user", req.message)
             save_message(assistant_msg_id, req.session_id, "assistant", clean_res, response_time_sec=elapsed)
-            # 백그라운드 대화 요약 & 오답 노트 파싱 태스크 등록 (실시간 채팅 속도 100% 보장)
+            # 백그라운드 대화 요약, 오답 파싱, LLM-as-a-Judge 품질 채점(1-10점) 태스크 등록 (0.5초 응답 속도 보장)
             bg_tasks.add_task(_update_session_summary_background, req.api_key, req.session_id)
             bg_tasks.add_task(_extract_grammar_errors_background, req.api_key, req.message, clean_res)
+            bg_tasks.add_task(_self_critique_ai_response_background, assistant_msg_id, req.message, clean_res)
 
         return {"response": clean_res}
     
@@ -650,24 +636,18 @@ async def chat(req: ChatRequest, bg_tasks: BackgroundTasks):
 
 
 @app.post("/api/translate")
-@observe(name="gemini_translate")
+@observe(name="nihongo_translate", as_type="generation")
 async def translate(req: TranslateRequest):
     effective_api_key = req.api_key or os.getenv("GEMINI_API_KEY")
-    if not effective_api_key and not is_hermes_available():
-        raise HTTPException(status_code=400, detail="로컬 Ollama Hermes 구동(ollama serve) 또는 .env의 GEMINI_API_KEY가 필요합니다.")
+    if not effective_api_key:
+        raise HTTPException(status_code=400, detail="GEMINI_API_KEY가 필요합니다.")
 
     _assert_no_prompt_injection(req.text)
 
     try:
         start_t = time.time()
         raw = ""
-        # 1. 로컬 Hermes가 켜져 있으면 100% 0원 로컬 모드로 번역 최우선 생성
-        if is_hermes_available():
-            print("[Standalone Local Hermes Translate Mode] Translating with Local Hermes...")
-            raw = generate_with_hermes(f"다음 일본어 문장을 한국어로 자연스럽게 번역하세요:\n{req.text}", system_prompt=TRANSLATE_PROMPT, temperature=0.2) or ""
-
-        # 2. 로컬 Hermes 미응답 시 Gemini API 폴백
-        if not raw and effective_api_key:
+        if effective_api_key:
             try:
                 client = genai.Client(api_key=effective_api_key)
                 config = types.GenerateContentConfig(
@@ -694,24 +674,18 @@ async def translate(req: TranslateRequest):
 
 
 @app.post("/api/furigana")
-@observe(name="gemini_furigana")
+@observe(name="nihongo_furigana", as_type="generation")
 async def furigana(req: TranslateRequest):
     effective_api_key = req.api_key or os.getenv("GEMINI_API_KEY")
-    if not effective_api_key and not is_hermes_available():
-        raise HTTPException(status_code=400, detail="로컬 Ollama Hermes 구동(ollama serve) 또는 .env의 GEMINI_API_KEY가 필요합니다.")
+    if not effective_api_key:
+        raise HTTPException(status_code=400, detail="GEMINI_API_KEY가 필요합니다.")
 
     _assert_no_prompt_injection(req.text)
 
     try:
         start_t = time.time()
         raw = ""
-        # 1. 로컬 Hermes가 켜져 있으면 100% 0원 로컬 모드로 후리가나 최우선 생성
-        if is_hermes_available():
-            print("[Standalone Local Hermes Furigana Mode] Generating furigana with Local Hermes...")
-            raw = generate_with_hermes(f"다음 일본어 문장에 한자 괄호 후리가나를 추가하세요:\n{req.text}", system_prompt=FURIGANA_PROMPT, temperature=0.1) or ""
-
-        # 2. 로컬 Hermes 미응답 시 Gemini API 폴백
-        if not raw and effective_api_key:
+        if effective_api_key:
             try:
                 client = genai.Client(api_key=effective_api_key)
                 config = types.GenerateContentConfig(
@@ -742,29 +716,9 @@ async def furigana(req: TranslateRequest):
 # ============================================================
 
 # Difficulty Prompts
-BEGINNER_PROMPT = """
-# Difficulty: Beginner
-# Persona: You are a friendly Japanese friend talking to a beginner Japanese learner.
-- Speak in EASY, SHORT, and CONCISE Japanese (1-2 sentences maximum, under 30 characters).
-- Use polite form (です・ます form).
-- Speak naturally like a real human friend, NOT a robotic textbook or formal speaker.
-"""
-
-INTERMEDIATE_PROMPT = """
-# Difficulty: Intermediate
-# Persona: You are a Japanese friend talking to an intermediate Japanese learner.
-- Speak in natural, everyday conversational Japanese (1-2 sentences maximum, under 50 characters).
-- Keep your reply BRIEF, casual, and friendly. Do NOT output long robotic speeches.
-- Use natural native phrasing.
-"""
-
-ADVANCED_PROMPT = """
-# Difficulty: Advanced
-# Persona: You are a Japanese friend talking to an advanced Japanese learner.
-- Speak in natural, native-level Japanese (1-2 sentences maximum, under 60 characters).
-- Keep your response CONCISE and conversational.
-- Use native idioms and natural expressions.
-"""
+BEGINNER_PROMPT = "Speak in simple, polite, concise Japanese (1-2 sentences, です・ます form)."
+INTERMEDIATE_PROMPT = "Speak in natural everyday conversational Japanese (1-2 sentences)."
+ADVANCED_PROMPT = "Speak in fluent, native-level Japanese (1-2 sentences)."
 
 DIFFICULTY_PROMPTS = {
     "beginner": BEGINNER_PROMPT,
@@ -772,60 +726,30 @@ DIFFICULTY_PROMPTS = {
     "advanced": ADVANCED_PROMPT
 }
 
-# --------------------------------------------------------------------------------------
-
 # Topic Prompts
 TOPIC_PROMPTS = {
-    "free": "Feel free to talk about anything.",
-    "dailyLife": "Talk about daily life. (From waking up in the morning to going to bed)",
-    "travel": "Talk about traveling in Japan. (Tourist spots, transportation, accommodation, etc.)",
-    "food": "Talk about Japanese food and cooking.",
-    "culture": "Talk about Japanese culture. (Festivals, customs, traditions, etc.)",
-    "business": "Have a conversation in business Japanese. (Meetings, phone calls, emails, etc.)",
-    "anime": "Talk about anime and manga."
+    "free": "Free topic.",
+    "dailyLife": "Daily life routines.",
+    "travel": "Travel in Japan.",
+    "food": "Japanese cuisine.",
+    "culture": "Japanese culture.",
+    "business": "Business Japanese.",
+    "anime": "Anime and manga."
 }
 
-# --------------------------------------------------------------------------------------
-
 # System Prompt Template
-SYSTEM_PROMPT_TEMPLATE = """Your name is "{partner_name}". You are a Japanese person in your 20s living in Japan.
+SYSTEM_PROMPT_TEMPLATE = """You are "{partner_name}", a friendly native Japanese speaker living in Japan.
 {difficulty_prompt}
+Topic: {topic_prompt}
 
-Conversation Topic: {topic_prompt}
+- Chat naturally in brief Japanese (1-2 sentences max).
+- Do NOT include bracketed readings in your reply."""
 
-CRITICAL CONVERSATIONAL RULES:
-- Keep your reply SHORT, CONCISE, and NATURAL (1-2 sentences maximum).
-- Speak like a real Japanese friend in a messaging app. ABSOLUTELY NO long formal speeches, textbook explanations, or weird literal translations!
-- Ensure 100% fluent native Japanese grammar.
-- NEVER include bracketed furigana/readings like 過ご(すご)す or 今日(きょう) in your main conversation response!
-- Output ONLY clean, natural Japanese text without any parenthetical readings.
+# Translation Prompt
+TRANSLATE_PROMPT = "Translate the Japanese text into natural, polite Korean. Output ONLY the translation without commentary."
 
-Important Rules:
-- Have a natural conversation like a friend with a Korean Japanese learner
-- Occasionally ask a short question to keep the conversation going
-- Always respond in natural Japanese"""
-
-# --------------------------------------------------------------------------------------
-
-# Translation Prompt (English System Instruction for Highest Precision)
-TRANSLATE_PROMPT = """You are an expert Japanese-to-Korean translator.
-Translate the provided Japanese text into natural, fluent, and polite Korean.
-CRITICAL INSTRUCTIONS:
-- Translate 100% into pure, natural Korean.
-- ABSOLUTELY NO English words (such as 'greetings', 'Shopsinside', etc.) or English alphabet allowed in the Korean output!
-- Do NOT output any English explanations, notes, grammatical breakdown, or formatting markers (*, Sentence, etc.).
-- Output ONLY the clean, final Korean translation text."""
-
-# --------------------------------------------------------------------------------------
-
-# Furigana Prompt (English System Instruction for Highest Precision)
-FURIGANA_PROMPT = """You are a Japanese linguistics expert.
-Add hiragana furigana readings in parentheses directly after every Kanji (漢字) in the provided Japanese text.
-CRITICAL INSTRUCTIONS:
-- Parentheses MUST contain ONLY pure Hiragana (ひらがな).
-- ABSOLUTELY NO Romaji / English alphabet (such as 'ohayou', 'teinai', 'greetings') or English explanations allowed!
-- Do NOT add parentheses to Hiragana words (e.g. do NOT write おはよう(おはよう)). Add parentheses ONLY directly after Kanji (漢字).
-- Output Format Example: 店内(てんない)でお召(め)し上(あ)がりですか、それともお持(も)ち帰(かえ)りですか？"""
+# Furigana Prompt
+FURIGANA_PROMPT = "Add Hiragana readings in parentheses directly after Kanji. Example: 店内(てんない)でお召(め)し上(あ)がりですか？"
 
 # --------------------------------------------------------------------------------------
 

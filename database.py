@@ -50,11 +50,13 @@ def init_db():
             )
         """)
         
-        # Auto-migration: check if response_time_sec column exists
+        # Auto-migration: check if response_time_sec and quality_score columns exist
         cursor.execute("PRAGMA table_info(messages)")
         cols = [row["name"] for row in cursor.fetchall()]
         if "response_time_sec" not in cols:
             cursor.execute("ALTER TABLE messages ADD COLUMN response_time_sec REAL")
+        if "quality_score" not in cols:
+            cursor.execute("ALTER TABLE messages ADD COLUMN quality_score REAL")
         
         # User memories & error notes table
         cursor.execute("""
@@ -198,6 +200,11 @@ def save_message(msg_id: str, session_id: str, role: str, content: str, translat
         "response_time_sec": response_time_sec,
         "timestamp": ts
     }
+def update_message_quality_score(msg_id: str, score: float):
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE messages SET quality_score = ? WHERE id = ?", (score, msg_id))
+        conn.commit()
 
 
 def get_session_messages(session_id: str) -> List[Dict[str, Any]]:

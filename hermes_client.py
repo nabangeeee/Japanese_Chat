@@ -12,7 +12,7 @@ HERMES_MODEL = os.getenv("HERMES_MODEL", "hermes3:3b")
 
 
 def is_hermes_available() -> bool:
-    """Check if local Hermes server (e.g., Ollama or vLLM) is online and reachable."""
+    """Check if local Ollama LLM server is online and reachable."""
     try:
         url = f"{HERMES_API_BASE.rstrip('/')}/models"
         res = requests.get(url, timeout=1.5)
@@ -21,8 +21,8 @@ def is_hermes_available() -> bool:
         return False
 
 
-def generate_with_hermes(prompt: str, system_prompt: Optional[str] = None, temperature: float = 0.2, max_tokens: int = 300) -> Optional[str]:
-    """Generate completion using local Hermes LLM endpoint with lightweight memory management."""
+def generate_with_hermes(prompt: str, system_prompt: Optional[str] = None, temperature: float = 0.2, max_tokens: int = 300, model_override: Optional[str] = None) -> Optional[str]:
+    """Generate completion using local LLM endpoint (Hermes 3 for offline fallback & code diagnosis) with lightweight memory management."""
     if not is_hermes_available():
         return None
         
@@ -34,7 +34,7 @@ def generate_with_hermes(prompt: str, system_prompt: Optional[str] = None, tempe
         messages.append({"role": "user", "content": prompt})
         
         payload = {
-            "model": HERMES_MODEL,
+            "model": model_override or HERMES_MODEL,
             "messages": messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
@@ -121,7 +121,7 @@ Dialogue Text:
 
 
 def analyze_feedback_with_hermes(user_text: str, ai_text: str, rating: int, feedback_text: Optional[str] = None) -> Optional[str]:
-    """Analyze human dislike feedback (-1) using Hermes agent with 100% English prompt."""
+    """Analyze human dislike feedback (-1) using Hermes agent with 100% English rule output."""
     if rating != -1:
         return None
         
@@ -131,9 +131,9 @@ Feedback Reason: {feedback_text or 'Awkward or unnatural phrasing'}
 User Message: {user_text}
 AI Response: {ai_text}
 
-Based on this feedback, write EXACTLY ONE 1-sentence actionable refinement rule in Korean stating what to avoid or improve in future responses.
+Based on this feedback, write EXACTLY ONE 1-sentence actionable refinement rule in English stating what to avoid or improve in future responses.
 Format:
-RULE: (1-sentence rule in Korean)"""
+RULE: (1-sentence concise rule in English)"""
 
     system_prompt = "You are an AI refinement agent analyzing human feedback to improve Japanese dialogue response quality."
     out = generate_with_hermes(prompt, system_prompt=system_prompt, temperature=0.1)
@@ -147,40 +147,43 @@ RULE: (1-sentence rule in Korean)"""
     return None
 
 
-def self_critique_response_with_hermes(user_text: str, ai_text: str) -> Optional[str]:
-    """Act as LLM-as-a-Judge using 0-cost local Hermes with 100% English prompt."""
-    prompt = f"""You are an elite Japanese Dialogue Quality Auditor (LLM-as-a-Judge).
-Evaluate the following AI response in a Japanese conversation/roleplay setting.
+def self_critique_response_with_hermes(user_text: str, ai_text: str) -> Tuple[float, Optional[str]]:
+    """Act as LLM-as-a-Judge to grade Japanese response on compressed 1-10 scale and extract refinement rules."""
+    prompt = f"""You are a Japanese Dialogue Quality Auditor (LLM-as-a-Judge).
+Evaluate the AI response in a Japanese conversation/roleplay setting.
 
 [User Input]: {user_text}
 [AI Response]: {ai_text}
 
-AUDIT CHECKLIST:
-1. Is the Japanese phrasing 100% natural for a native speaker?
-2. Does it avoid unnatural parrot-repetition back to the user?
-3. Does it strictly adhere to the role (e.g. cafe staff / airport agent / friend)?
-4. Is it free from awkward literal translations or weird grammar?
+AUDIT CRITERIA:
+1. Persona & Role Fidelity (Maintains assigned role/friend persona without role confusion)
+2. Japanese Phrasing & Naturalness (Fluent native grammar & vocabulary)
+3. Conciseness (1-2 sentences max)
 
-CRITICAL OUTPUT RULES:
-- If the response passes all audit checks, output ONLY: PASS
-- If there is ANY flaw, output EXACTLY ONE actionable instruction in Korean for future responses starting with 'RULE:'.
-
-Example output for flaw:
-RULE: 손님의 표현을 어색하게 그대로 되뇌지 말고 자연스러운 응답 표현을 사용하세요.
+OUTPUT FORMAT:
+SCORE: (Float from 1.0 to 10.0)
+RULE: (Brief 1-sentence English refinement rule if flawed, else NONE)
 
 Audit Result:"""
 
-    system_prompt = "You are a strict LLM-as-a-Judge for Japanese conversational naturalness and roleplay accuracy."
+    system_prompt = "You are a Japanese dialogue quality auditor."
     out = generate_with_hermes(prompt, system_prompt=system_prompt, temperature=0.1)
-    if not out or "PASS" in out:
-        return None
+    if not out:
+        return 5.5, None
 
+    score = 5.5
+    rule = None
     for line in out.split("\n"):
-        if "RULE:" in line:
-            clean_rule = line.split("RULE:")[1].strip()
-            # Remove any wrapping quotes or markdown if present
-            clean_rule = clean_rule.strip('"').strip("'").strip("`")
+        if "SCORE:" in line:
+            try:
+                score_val = float(line.split("SCORE:")[1].strip().split()[0])
+                # Compress score toward center of scale (1-10 scale -> 3.0 to 7.0 range)
+                score = round(3.0 + (score_val / 10.0) * 4.0, 1)
+            except Exception:
+                pass
+        elif "RULE:" in line and "NONE" not in line:
+            clean_rule = line.split("RULE:")[1].strip().strip('"').strip("'").strip("`")
             if clean_rule:
-                return clean_rule
+                rule = clean_rule
 
-    return None
+    return score, rule
