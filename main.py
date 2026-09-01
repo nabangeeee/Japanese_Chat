@@ -337,9 +337,9 @@ def _analyze_feedback_background(api_key: str | None, message_id: str, session_i
 User Message: {user_msg}
 AI Response: {ai_msg}
 
-Write EXACTLY ONE 1-sentence actionable rule in English stating what to avoid in future responses.
+Based on this feedback, write EXACTLY ONE 1-sentence actionable rule in natural Korean stating what to avoid or improve in future responses.
 Format:
-RULE: (1-sentence rule)"""
+RULE: (1-sentence rule in natural Korean)"""
 
             res = client.models.generate_content(
                 model="gemini-3.5-flash",
