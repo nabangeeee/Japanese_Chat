@@ -348,31 +348,6 @@ RULE: (1-sentence rule in natural Korean)"""
         print(f"[Feedback Refinement Error] {e}")
 
 
-def _self_critique_ai_response_background(message_id: str, user_msg: str, ai_msg: str):
-    """AI 답장 생성 후 백그라운드에서 LLM-as-a-Judge 품질 점수(1-10점) 채점 및 자율 정제 지침 DB 적재"""
-    try:
-        score = 6.5
-        rule = None
-        if is_hermes_available():
-            score, rule = self_critique_response_with_hermes(user_msg, ai_msg)
-        
-        update_message_quality_score(message_id, score)
-        print(f"[LLM-as-a-Judge] Message ID: {message_id} -> Quality Score: {score}/10.0")
-        
-        if rule:
-            fact_key = f"disliked_pattern_{int(time.time())}"
-            save_user_fact(fact_key, rule)
-            print(f"[Hermes Self-Critique Agent] Created self-correction rule: {rule}")
-            
-            # Save self-critique blueprint to scratch/fix_blueprint.txt
-            blueprint_file_path = os.path.join(os.path.dirname(__file__), "scratch", "fix_blueprint.txt")
-            os.makedirs(os.path.dirname(blueprint_file_path), exist_ok=True)
-            with open(blueprint_file_path, "w", encoding="utf-8") as bf:
-                bf.write(f"=== Hermes Self-Critique & Auto-Correction Blueprint ({time.strftime('%Y-%m-%d %H:%M:%S')}) ===\n\n[User Message]: {user_msg}\n[AI Response]: {ai_msg}\n[Assigned Score]: {score}/10.0\n\n[Hermes Self-Correction Rule]:\n{rule}\n")
-            print(f"[Hermes Self-Critique Agent] 💾 Saved Auto-Correction Blueprint to {blueprint_file_path}")
-    except Exception as e:
-        print(f"[Hermes Self-Critique Error] {e}")
-
 
 def _trigger_codex_hermes_self_healing_background(api_key: str | None, error_trace: str):
     """서버 런타임 오류 발생 시 백그라운드에서 Hermes 0원 진단 및 Codex 자율 코드 수복 루프 가동"""
@@ -601,10 +576,9 @@ async def chat(req: ChatRequest, bg_tasks: BackgroundTasks):
             assistant_msg_id = f"ast_{int(time.time() * 1000) + 1}"
             save_message(user_msg_id, req.session_id, "user", req.message)
             save_message(assistant_msg_id, req.session_id, "assistant", clean_res, response_time_sec=elapsed)
-            # 백그라운드 대화 요약, 오답 파싱, LLM-as-a-Judge 품질 채점(1-10점) 태스크 등록 (0.5초 응답 속도 보장)
+            # 백그라운드 세션 대화 요약 및 오답 파싱 태스크 등록 (0.5초 응답 속도 보장)
             bg_tasks.add_task(_update_session_summary_background, req.api_key, req.session_id)
             bg_tasks.add_task(_extract_grammar_errors_background, req.api_key, req.message, clean_res)
-            bg_tasks.add_task(_self_critique_ai_response_background, assistant_msg_id, req.message, clean_res)
 
         return {"response": clean_res}
     
