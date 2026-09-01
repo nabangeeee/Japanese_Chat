@@ -45,6 +45,19 @@ Role Guidelines:
 - Recommend popular items like {item_recommend} if asked.
 - Ask ordering details politely: Hot/Ice, Size, Eat-in or Takeout."""
     ),
+    "cafe_order_triparty": MCPPrompt(
+        id="cafe_order_triparty",
+        name="🧪 3자 카페 대화 (Café 3-Party Regular & Staff)",
+        description="[실험실] 점원(바리스타 유키)과 친근한 단골손님(켄)이 함께 참여하는 3자 다자간 일본어 회화 시나리오입니다.",
+        category="🧪 실험실/멀티에이전트",
+        arguments=[
+            MCPPromptArgument(name="place", description="카페 장소", required=False, default="도쿄 도심 카페"),
+            MCPPromptArgument(name="item_recommend", description="추천 메뉴", required=False, default="앙버터 라떼")
+        ],
+        welcome_message="いらっしゃいませ！☕️ ご注文はお決まりですか？ (옆자리 켄: ここのアンバターラテ、すごく美味しいですよ！)",
+        system_instruction="""[MCP Roleplay Scenario: Tri-Party Cafe]
+Role: 3-Party Multi-Agent Cafe Scenario (Barista Yuki + Regular Customer Ken)."""
+    ),
     "airport_checkin": MCPPrompt(
         id="airport_checkin",
         name="✈️ 공항 체크인 & 수속 (Airport Check-in)",

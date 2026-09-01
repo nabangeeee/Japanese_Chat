@@ -187,3 +187,32 @@ Audit Result:"""
                 rule = clean_rule
 
     return score, rule
+
+
+def orchestrate_speaker_turn_with_hermes(user_text: str, dialogue_history: list = None) -> str:
+    """Hermes 0-cost Orchestrator decides multi-speaker turn routing in a 3-party roleplay setting."""
+    prompt = f"""You are a Multi-Agent Turn Orchestrator for a Japanese Cafe 3-Party Roleplay.
+The scene includes: User (Customer), Staff (Yuki, Cafe Barista), and Regular (Ken, Local Customer).
+
+[User Input]: {user_text}
+
+Decide which AI speakers should respond in this turn.
+Rules:
+- If User asks for order/bill/menu directly to staff -> STAFF_ONLY
+- If User greets generally or asks for recommendations -> STAFF_AND_REGULAR
+- If User talks to the regular customer -> REGULAR_ONLY
+
+Output EXACTLY ONE string: STAFF_ONLY, REGULAR_ONLY, or STAFF_AND_REGULAR."""
+
+    system_prompt = "You are a Multi-Agent Turn Orchestrator routing dialogue speaker turns."
+    out = generate_with_hermes(prompt, system_prompt=system_prompt, temperature=0.1)
+    if not out:
+        return "STAFF_AND_REGULAR"
+    
+    clean_out = out.upper().strip()
+    if "REGULAR_ONLY" in clean_out:
+        return "REGULAR_ONLY"
+    elif "STAFF_ONLY" in clean_out:
+        return "STAFF_ONLY"
+    else:
+        return "STAFF_AND_REGULAR"

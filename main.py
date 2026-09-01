@@ -20,7 +20,7 @@ from database import (
     save_session_summary, get_session_summary, save_user_fact, get_all_user_facts,
     get_recent_live_trends, save_message_feedback, update_message_quality_score
 )
-from hermes_client import is_hermes_available, summarize_session_with_hermes, self_critique_response_with_hermes
+from hermes_client import is_hermes_available, summarize_session_with_hermes, self_critique_response_with_hermes, orchestrate_speaker_turn_with_hermes
 from codex_hermes_loop import diagnose_with_hermes
 from openclaw_collector import fetch_latest_japan_trends
 from contextlib import asynccontextmanager
@@ -585,6 +585,71 @@ async def chat(req: ChatRequest, bg_tasks: BackgroundTasks):
     except Exception as e:
         err_trace = traceback.format_exc()
         bg_tasks.add_task(_trigger_codex_hermes_self_healing_background, req.api_key, err_trace)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/multi_chat")
+@observe(name="nihongo_multi_chat", as_type="generation")
+async def multi_chat(req: ChatRequest, bg_tasks: BackgroundTasks):
+    """🧪 [Labs] 3-Party Multi-Agent Roleplay Endpoint (Hermes Turn Orchestrator + Gemini Dual Personas)"""
+    effective_api_key = req.api_key or os.getenv("GEMINI_API_KEY")
+    if not effective_api_key:
+        raise HTTPException(status_code=400, detail="GEMINI_API_KEY가 필요합니다.")
+
+    _assert_no_prompt_injection(req.message)
+
+    try:
+        start_t = time.time()
+        # 1. Hermes 0-Cost Local Central Orchestrator decides Speaker Turn
+        turn_decision = "STAFF_AND_REGULAR"
+        if is_hermes_available():
+            turn_decision = orchestrate_speaker_turn_with_hermes(req.message, req.history)
+            print(f"[Labs Multi-Agent] 🤖 Hermes Orchestrator Turn Decision: {turn_decision}")
+        else:
+            print("[Labs Multi-Agent] Hermes offline, fallback to STAFF_AND_REGULAR turn.")
+
+        responses = []
+        client = genai.Client(api_key=effective_api_key)
+
+        # 2-A. Staff Persona (Yuki, Cafe Barista)
+        if turn_decision in ["STAFF_ONLY", "STAFF_AND_REGULAR"]:
+            sys_staff = "You are Yuki, a polite Japanese cafe barista. Respond in 1-2 brief sentences."
+            res_staff = client.models.generate_content(
+                model="gemini-3.5-flash",
+                contents=f"Customer: {req.message}",
+                config=types.GenerateContentConfig(system_instruction=sys_staff, temperature=0.7, max_output_tokens=300)
+            )
+            staff_text = clean_japanese_text(redact_sensitive_output(res_staff.text or ""))
+            if staff_text:
+                responses.append({
+                    "speaker": "staff",
+                    "name": "유키 (바리스타)",
+                    "avatar": "☕️",
+                    "text": staff_text
+                })
+
+        # 2-B. Regular Customer Persona (Ken, Local Regular)
+        if turn_decision in ["REGULAR_ONLY", "STAFF_AND_REGULAR"]:
+            sys_regular = "You are Ken, a friendly Japanese regular customer sitting nearby at the cafe. Speak warmly in 1-2 brief sentences."
+            res_regular = client.models.generate_content(
+                model="gemini-3.5-flash",
+                contents=f"Customer: {req.message}",
+                config=types.GenerateContentConfig(system_instruction=sys_regular, temperature=0.7, max_output_tokens=300)
+            )
+            regular_text = clean_japanese_text(redact_sensitive_output(res_regular.text or ""))
+            if regular_text:
+                responses.append({
+                    "speaker": "regular",
+                    "name": "켄 (단골손님)",
+                    "avatar": "🙋‍♂️",
+                    "text": regular_text
+                })
+
+        elapsed = round(time.time() - start_t, 2)
+        print(f"[Labs Multi-Agent API END] Completed in {elapsed:.2f} seconds.")
+        return {"turn_decision": turn_decision, "responses": responses}
+
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
