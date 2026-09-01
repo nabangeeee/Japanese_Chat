@@ -257,13 +257,13 @@ def _extract_grammar_errors_background(api_key: str, user_text: str, ai_text: st
     try:
         if api_key:
             client = genai.Client(api_key=api_key)
-            prompt = f"""다음 대화에서 사용자의 문법/어휘 실수가 있다면 교정 항목을 작성하고, 없으면 NONE을 출력하세요.
-Format (실수 있을 때만):
-ORIGINAL: (틀린 문장)
-CORRECTED: (올바른 일본어 문장)
-EXPLANATION: (1문장 한국어 설명)
+            prompt = f"""Identify any Japanese grammar or vocabulary errors in the user's message. If no error, output NONE.
+Format (ONLY if error exists):
+ORIGINAL: (User's flawed sentence)
+CORRECTED: (Corrected Japanese sentence)
+EXPLANATION: (1-sentence Korean explanation of the grammar mistake)
 
-사용자: {user_text}
+User: {user_text}
 AI: {ai_text}"""
 
             res = client.models.generate_content(
