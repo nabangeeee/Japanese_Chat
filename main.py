@@ -99,15 +99,15 @@ def clean_japanese_text(text: str) -> str:
 def clean_furigana_text(text: str) -> str:
     if not text:
         return text
-    # 1. Remove Romaji / English alphabet inside parentheses
+    # 1. Remove Romaji / English alphabet inside parentheses e.g. (ohayou)
     text = re.sub(r'\([a-zA-Z\s\-\.\,\?!]+\)', '', text)
-    # 2. Remove duplicated Hiragana parenthesis if it matches preceding hiragana
+    # 2. Remove duplicated Hiragana parenthesis if it matches preceding hiragana e.g. おはよう(おはよう) -> おはよう
     text = re.sub(r'([ぁ-んァ-ヶ]+)\(\1\)', r'\1', text)
-    # 3. Clean Kanji leaked inside parenthesis e.g. 上(召し上がり) -> (めしあがり)
-    text = re.sub(r'\(.*?[一-龠]+.*?\)', '', text)
-    # 4. Clean any remaining raw English artifacts
-    text = re.sub(r'[a-zA-Z]{2,}', '', text)
-    return text.strip()
+    # 3. Clean parens that erroneously contain Kanji inside parens e.g. (漢字)
+    text = re.sub(r'\([^)]*[\u4e00-\u9fff][^)]*\)', '', text)
+    # 4. Clean double spaces
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
 
 
 def clean_translation_text(text: str) -> str:
@@ -749,7 +749,9 @@ Topic: {topic_prompt}
 TRANSLATE_PROMPT = "Translate the Japanese text into natural, polite Korean. Output ONLY the translation without commentary."
 
 # Furigana Prompt
-FURIGANA_PROMPT = "Add Hiragana readings in parentheses directly after Kanji. Example: 店内(てんない)でお召(め)し上(あ)がりですか？"
+FURIGANA_PROMPT = """Add Hiragana readings in parentheses directly after every Kanji (漢字).
+Output Format Example: 航空(こうくう)券(けん)とパスポートをお預(あず)かりいたします。本日(ほんじつ)お預(あず)けになる手荷物(てにもつ)はございますか？
+Output ONLY the Japanese text with furigana parentheses."""
 
 # --------------------------------------------------------------------------------------
 
