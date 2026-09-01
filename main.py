@@ -20,7 +20,7 @@ from database import (
     save_session_summary, get_session_summary, save_user_fact, get_all_user_facts,
     get_recent_live_trends, save_message_feedback, update_message_quality_score
 )
-from hermes_client import is_hermes_available, summarize_session_with_hermes, extract_grammar_errors_with_hermes, analyze_feedback_with_hermes, self_critique_response_with_hermes, generate_with_hermes
+from hermes_client import is_hermes_available, summarize_session_with_hermes, self_critique_response_with_hermes
 from codex_hermes_loop import diagnose_with_hermes
 from openclaw_collector import fetch_latest_japan_trends
 from contextlib import asynccontextmanager
