@@ -749,9 +749,7 @@ Topic: {topic_prompt}
 TRANSLATE_PROMPT = "Translate the Japanese text into natural, polite Korean. Output ONLY the translation without commentary."
 
 # Furigana Prompt
-FURIGANA_PROMPT = """Add Hiragana readings in parentheses directly after every Kanji (漢字).
-Output Format Example: 航空(こうくう)券(けん)とパスポートをお預(あず)かりいたします。本日(ほんじつ)お預(あず)けになる手荷物(てにもつ)はございますか？
-Output ONLY the Japanese text with furigana parentheses."""
+FURIGANA_PROMPT = "Add Hiragana readings in parentheses directly after every Kanji (漢字)."
 
 # --------------------------------------------------------------------------------------
 
