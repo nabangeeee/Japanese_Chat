@@ -261,7 +261,7 @@ def _extract_grammar_errors_background(api_key: str, user_text: str, ai_text: st
 Format (ONLY if error exists):
 ORIGINAL: (User's flawed sentence)
 CORRECTED: (Corrected Japanese sentence)
-EXPLANATION: (1-sentence Korean explanation of the grammar mistake)
+EXPLANATION: (1-sentence easy explanation in 100% fluent Korean)
 
 User: {user_text}
 AI: {ai_text}"""
@@ -286,14 +286,6 @@ AI: {ai_text}"""
                 if orig and corr:
                     save_user_memory("Grammar Error", orig, corr, expl)
                     print(f"[Gemini Error Note] Saved error note: '{orig}' -> '{corr}'")
-                    return
-
-        # 로컬 Hermes 오프라인 폴백
-        if is_hermes_available():
-            err_data = extract_grammar_errors_with_hermes(user_text, ai_text)
-            if err_data:
-                orig, corr, expl = err_data
-                save_user_memory("Grammar Error", orig, corr, expl)
     except Exception as e:
         print(f"[Error Note Memory Error] {e}")
 
