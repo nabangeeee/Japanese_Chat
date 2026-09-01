@@ -326,33 +326,20 @@ def _analyze_feedback_background(api_key: str | None, message_id: str, session_i
                 if matched_index > 0:
                     user_msg = messages[matched_index - 1]["content"]
 
-        # 1. Hermes 0원 에이전트가 유저 부정적 피드백 분석 및 진단서(fix_blueprint.txt) 작성
-        if is_hermes_available():
-            rule = analyze_feedback_with_hermes(user_msg, ai_msg, rating, feedback_text)
-            if rule:
-                fact_key = f"disliked_pattern_{int(time.time())}"
-                save_user_fact(fact_key, rule)
-                print(f"[Hermes Feedback Refinement] Created rule: {rule}")
-                
-                # Save feedback blueprint to scratch/fix_blueprint.txt
-                blueprint_file_path = os.path.join(os.path.dirname(__file__), "scratch", "fix_blueprint.txt")
-                os.makedirs(os.path.dirname(blueprint_file_path), exist_ok=True)
-                with open(blueprint_file_path, "w", encoding="utf-8") as bf:
-                    bf.write(f"=== Hermes Feedback Self-Refinement Blueprint ({time.strftime('%Y-%m-%d %H:%M:%S')}) ===\n\n[User Message]: {user_msg}\n[AI Answer]: {ai_msg}\n[Feedback Reason]: {feedback_text or '어색하거나 비자연스러운 표현'}\n\n[Hermes Extracted Rule]:\n{rule}\n")
-                print(f"[Hermes Feedback Refinement] 💾 Saved Feedback Blueprint to {blueprint_file_path}")
+        # 유저가 구체적 피드백 사유(feedback_text)를 적었거나 Gemini 3.5 Flash로 정확 분석할 때만 DB 규칙 저장
+        if not feedback_text:
+            print("[Feedback Refinement] No explicit feedback text provided. Skipping DB rule generation to avoid false rules.")
             return
 
-        # 2. Hermes 미응답 시 Gemini 폴백
         if api_key:
             client = genai.Client(api_key=api_key)
-            prompt = f"""The user gave a 👎 (dislike) feedback to the AI response in a Japanese conversation.
-Feedback Reason: {feedback_text or 'Awkward phrasing'}
+            prompt = f"""The user gave 👎 feedback with reason: "{feedback_text}"
 User Message: {user_msg}
 AI Response: {ai_msg}
 
-Write EXACTLY ONE 1-sentence actionable refinement rule in English stating what to avoid or improve in future responses.
+Write EXACTLY ONE 1-sentence actionable rule in English stating what to avoid in future responses.
 Format:
-RULE: (1-sentence rule in English)"""
+RULE: (1-sentence rule)"""
 
             res = client.models.generate_content(
                 model="gemini-3.5-flash",
@@ -364,7 +351,7 @@ RULE: (1-sentence rule in English)"""
                 rule = out.split("RULE:")[1].strip()
                 fact_key = f"disliked_pattern_{int(time.time())}"
                 save_user_fact(fact_key, rule)
-                print(f"[Gemini Feedback Refinement] Created rule: {rule}")
+                print(f"[Gemini Feedback Refinement] Created accurate rule: {rule}")
     except Exception as e:
         print(f"[Feedback Refinement Error] {e}")
 
