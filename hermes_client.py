@@ -7,12 +7,15 @@ import os
 import requests
 from typing import Optional, Dict, Any, Tuple
 
-HERMES_API_BASE = os.getenv("HERMES_API_BASE", "http://localhost:11434/v1")
-HERMES_MODEL = os.getenv("HERMES_MODEL", "hermes3:3b")
+HERMES_API_KEY = os.getenv("HERMES_API_KEY") or os.getenv("OPENROUTER_API_KEY")
+HERMES_API_BASE = os.getenv("HERMES_API_BASE", "https://openrouter.ai/api/v1") if HERMES_API_KEY else os.getenv("HERMES_API_BASE", "http://localhost:11434/v1")
+HERMES_MODEL = os.getenv("HERMES_MODEL", "nousresearch/hermes-3-llama-3.1-8b" if HERMES_API_KEY else "hermes3:3b")
 
 
 def is_hermes_available() -> bool:
-    """Check if local Ollama LLM server is online and reachable."""
+    """Check if Hermes Cloud API / OpenRouter Key or Remote Server is online and reachable."""
+    if HERMES_API_KEY:
+        return True
     try:
         url = f"{HERMES_API_BASE.rstrip('/')}/models"
         res = requests.get(url, timeout=1.5)
@@ -22,12 +25,18 @@ def is_hermes_available() -> bool:
 
 
 def generate_with_hermes(prompt: str, system_prompt: Optional[str] = None, temperature: float = 0.2, max_tokens: int = 300, model_override: Optional[str] = None) -> Optional[str]:
-    """Generate completion using local LLM endpoint (Hermes 3 for offline fallback & code diagnosis) with lightweight memory management."""
+    """Generate completion using Hermes Agent API (Remote Cloud Agent / OpenRouter or Local API)."""
     if not is_hermes_available():
         return None
         
     try:
         url = f"{HERMES_API_BASE.rstrip('/')}/chat/completions"
+        headers = {"Content-Type": "application/json"}
+        if HERMES_API_KEY:
+            headers["Authorization"] = f"Bearer {HERMES_API_KEY}"
+            headers["HTTP-Referer"] = "https://nihongochat.local"
+            headers["X-Title"] = "NihongoChat Hermes Agent"
+            
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
@@ -37,14 +46,15 @@ def generate_with_hermes(prompt: str, system_prompt: Optional[str] = None, tempe
             "model": model_override or HERMES_MODEL,
             "messages": messages,
             "temperature": temperature,
-            "max_tokens": max_tokens,
-            "keep_alive": "3m"  # 3분 후 메모리 자동 해제하여 맥북 렉 방지
+            "max_tokens": max_tokens
         }
         
-        res = requests.post(url, json=payload, timeout=20)
+        res = requests.post(url, headers=headers, json=payload, timeout=20)
         if res.status_code == 200:
             data = res.json()
             return data["choices"][0]["message"]["content"].strip()
+        else:
+            print(f"[Hermes API Warning] Status Code {res.status_code}: {res.text[:150]}")
     except Exception as e:
         print(f"[Hermes Connector Error] {e}")
         
