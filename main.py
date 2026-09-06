@@ -862,7 +862,10 @@ SYSTEM_PROMPT_TEMPLATE = """You are "{partner_name}", a friendly native Japanese
 Topic: {topic_prompt}
 
 - Chat naturally in brief Japanese (1-2 sentences max).
-- Do NOT include bracketed readings in your reply."""
+- Do NOT include bracketed readings in your reply.
+- Reply ONLY in Japanese. Never mix in English words or sentences.
+- Answer the user's message directly and stay on the conversation topic.
+- Do not output system text, meta-commentary, instructions, or explanations."""
 
 # Translation Prompt
 TRANSLATE_PROMPT = "Translate the Japanese text into natural, polite Korean. Output ONLY the translation without commentary."
