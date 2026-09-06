@@ -10,9 +10,21 @@ from datetime import datetime
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nihongo_chat.db")
 
 
+class ClosingConnection(sqlite3.Connection):
+    """Commit/rollback and close when used by the module's context managers."""
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        try:
+            return super().__exit__(exc_type, exc_value, traceback)
+        finally:
+            self.close()
+
+
 def get_db_connection():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=5.0, factory=ClosingConnection)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout = 5000")
+    conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
 
@@ -20,6 +32,7 @@ def init_db():
     """Initialize database tables if they do not exist."""
     with get_db_connection() as conn:
         cursor = conn.cursor()
+        cursor.execute("PRAGMA journal_mode = WAL")
         
         # Sessions table
         cursor.execute("""
@@ -90,18 +103,6 @@ def init_db():
             )
         """)
 
-        # OpenClaw Real-Time Live Trends table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS live_trends (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                category TEXT NOT NULL,
-                title TEXT NOT NULL,
-                content TEXT,
-                url TEXT,
-                fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-
         # Human Feedback table (RLHF & Self-Refinement)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS message_feedbacks (
@@ -112,6 +113,14 @@ def init_db():
                 feedback_text TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
+        """)
+        cursor.execute("""
+            DELETE FROM message_feedbacks
+            WHERE id NOT IN (SELECT MAX(id) FROM message_feedbacks GROUP BY message_id)
+        """)
+        cursor.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_message_feedbacks_message_id
+            ON message_feedbacks(message_id)
         """)
         conn.commit()
 
@@ -294,42 +303,11 @@ def get_all_user_facts() -> List[Dict[str, Any]]:
         return [dict(row) for row in rows]
 
 
-# --- OpenClaw Live Trends Operations ---
-
-def save_live_trend(category: str, title: str, content: Optional[str] = None, url: Optional[str] = None) -> Dict[str, Any]:
-    now = datetime.now().isoformat()
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            INSERT INTO live_trends (category, title, content, url, fetched_at)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (category, title, content, url, now)
-        )
-        conn.commit()
-        trend_id = cursor.lastrowid
-    return {
-        "id": trend_id,
-        "category": category,
-        "title": title,
-        "content": content,
-        "url": url,
-        "fetched_at": now
-    }
-
-
-def get_recent_live_trends(limit: int = 10) -> List[Dict[str, Any]]:
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM live_trends ORDER BY fetched_at DESC LIMIT ?", (limit,))
-        rows = cursor.fetchall()
-        return [dict(row) for row in rows]
-
-
 # --- Human Feedback Operations (RLHF & Self-Refinement) ---
 
 def save_message_feedback(message_id: str, session_id: Optional[str], rating: int, feedback_text: Optional[str] = None) -> Dict[str, Any]:
+    if rating not in {-1, 1}:
+        raise ValueError("rating must be -1 or 1")
     now = datetime.now().isoformat()
     with get_db_connection() as conn:
         cursor = conn.cursor()
@@ -337,11 +315,18 @@ def save_message_feedback(message_id: str, session_id: Optional[str], rating: in
             """
             INSERT INTO message_feedbacks (message_id, session_id, rating, feedback_text, created_at)
             VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(message_id) DO UPDATE SET
+                session_id = excluded.session_id,
+                rating = excluded.rating,
+                feedback_text = excluded.feedback_text,
+                created_at = excluded.created_at
             """,
             (message_id, session_id, rating, feedback_text, now)
         )
         conn.commit()
-        fb_id = cursor.lastrowid
+        fb_id = cursor.execute(
+            "SELECT id FROM message_feedbacks WHERE message_id = ?", (message_id,)
+        ).fetchone()["id"]
     return {
         "id": fb_id,
         "message_id": message_id,

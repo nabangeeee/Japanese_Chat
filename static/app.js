@@ -248,18 +248,20 @@ async function initSessionSystem() {
             const data = await res.json();
             state.sessions = data.sessions || [];
         }
-        
-        // 브라우저 탭 세션(sessionStorage)을 활용한 새로고침 vs 첫 접속 구분
-        const lastActiveSessionId = sessionStorage.getItem('nihongoActiveSessionId');
-        
-        if (lastActiveSessionId && state.sessions.some(s => s.session_id === lastActiveSessionId)) {
-            await switchSession(lastActiveSessionId, false);
-        } else {
-            await startNewSession(false);
-        }
     } catch (e) {
-        console.error('Session init failed:', e);
-        loadMessages();
+        console.error('Session list load failed:', e);
+    }
+
+    // 새로고침할 때 이전 활성 대화와 로컬 메시지 캐시를 이어받지 않는다.
+    sessionStorage.removeItem('nihongoActiveSessionId');
+    localStorage.removeItem('nihongoMessages');
+    state.currentSessionId = null;
+    state.messages = [];
+    await startNewSession(false);
+
+    // 세션 생성 API가 실패해도 이전 대화 대신 새 로컬 대화 화면을 표시한다.
+    if (state.messages.length === 0) {
+        addWelcomeMessage();
     }
 }
 
@@ -679,6 +681,13 @@ function escapeHTML(str) {
     return div.innerHTML;
 }
 
+function isValidFurigana(reading, source) {
+    if (!reading || /[A-Za-z]/.test(reading)) return false;
+    const hasKanji = /[\u3400-\u9FFF々〆ヶ]/.test(source || '');
+    if (!hasKanji) return true;
+    return /\([\u3040-\u309Fー]+\)/.test(reading);
+}
+
 // 상세 정보 토글
 async function toggleDetails(messageId) {
     const details = document.getElementById(`details-${messageId}`);
@@ -696,7 +705,7 @@ async function toggleDetails(messageId) {
     
     // 번역/후리가나가 없으면 가져오기
     const needsTranslation = state.settings.showTranslation && !message.translation;
-    const needsFurigana = state.settings.showFurigana && !message.furigana;
+    const needsFurigana = state.settings.showFurigana && !isValidFurigana(message.furigana, message.content);
     
     if (needsTranslation || needsFurigana) {
         // 로딩 표시
@@ -726,7 +735,13 @@ async function toggleDetails(messageId) {
                     body: JSON.stringify({ text: message.content, api_key: state.settings.apiKey || '' })
                 })
                 .then(res => res.ok ? res.json() : null)
-                .then(data => { if (data) message.furigana = data.furigana; })
+                .then(data => {
+                    if (data && isValidFurigana(data.furigana, message.content)) {
+                        message.furigana = data.furigana;
+                    } else {
+                        delete message.furigana;
+                    }
+                })
                 .catch(e => console.error('Furigana failed:', e))
             );
         }
