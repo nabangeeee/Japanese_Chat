@@ -41,9 +41,9 @@ Gemini handles chat and learning utilities. Runtime failures can start a bounded
 - Every generated conversation response is scored asynchronously by an LLM-as-a-Judge.
 - A no-LLM observer checks measured quality, duplicate responses, p95 latency, and explicit negative feedback every day at 21:00 KST.
 - Threshold violations create a persisted proposal under `scratch/improvement/` and send it to Telegram. No code is changed at this stage.
-- Reply `승인 IMP-... <approval-token>` in Telegram to let Hermes reproduce the issue, add a test, make the minimum change, verify the full suite, and create one Git commit. The token binds approval to the exact proposal and Git base commit.
+- Reply `승인 IMP-... <approval-token>` in Telegram to let Hermes reproduce the issue, add a test, make the minimum change, verify the full suite, create one Git commit, and push it to the current `origin` branch. The token binds approval to the exact proposal and Git base commit.
 - The paired Hermes Telegram gateway authenticates the remote sender and passes the bound token to the guarded CLI; direct CLI access is inside the trusted local-OS-user boundary.
-- Reply `거절 IMP-...` to close the proposal. Approved work runs in a standalone clone under the same credential-free Seatbelt sandbox; failed or unsafe changes are discarded, and only a verified commit is applied.
+- Reply `거절 IMP-...` to close the proposal. Approved work runs in a standalone clone under the same credential-free Seatbelt sandbox; failed or unsafe changes are discarded, and only a verified commit is applied and pushed. A push failure keeps the verified commit locally and reports the failure to Telegram.
 - The agent follows RED-GREEN-REFACTOR, checks related call paths, edits only inside the repository, and runs focused and full tests.
 - A file lock suppresses overlapping repairs. Incident prompts and results are saved under `scratch/self_healing/`.
 
@@ -99,7 +99,7 @@ Japanese/
 ├── main.py                     # FastAPI gateway, routes & background task orchestrator
 ├── autonomous_repair.py        # Runtime exception → Hermes Agent repair runner
 ├── runtime_repair_worker.py    # Durable incident queue maintenance worker
-├── continuous_improvement.py   # Metrics → proposal → approval → verified commit
+├── continuous_improvement.py   # Metrics → approval → verified commit → origin push
 ├── sandboxed_hermes.py          # Seatbelt-confined credential-free Hermes runner
 ├── morning_digest.py            # Recent chats → validated Telegram study digest
 ├── notifications.py             # Telegram delivery via configured Hermes gateway

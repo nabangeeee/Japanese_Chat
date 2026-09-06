@@ -11,6 +11,10 @@ from unittest.mock import patch
 
 from continuous_improvement import (
     _contains_sensitive_artifacts,
+    _finish_pushed_proposal,
+    _git_push_target,
+    _promote_verified_commit,
+    _push_verified_commit,
     ImprovementSignal,
     approve_proposal,
     collect_metrics,
@@ -20,6 +24,119 @@ from continuous_improvement import (
 
 
 class ContinuousImprovementTests(unittest.TestCase):
+    def test_pushed_proposal_returns_failure_when_applied_state_cannot_persist(self) -> None:
+        proposal = {"id": "IMP-20260907-aaaaaaaa", "status": "verified"}
+        with patch(
+            "continuous_improvement._save_proposal", side_effect=OSError("disk full")
+        ), patch("continuous_improvement.send_telegram") as notify:
+            result = _finish_pushed_proposal(
+                proposal, Path("/tmp/state"), "b" * 40, notify=True
+            )
+
+        self.assertFalse(result)
+        self.assertEqual(proposal["status"], "verified")
+        self.assertNotIn("pushed_at", proposal)
+        notify.assert_called_once()
+        self.assertIn("상태 기록 실패", notify.call_args.args[0])
+        self.assertNotIn("개선 완료", notify.call_args.args[0])
+
+    def test_push_target_binds_full_checked_out_branch_and_origin_upstream(self) -> None:
+        results = [
+            subprocess.CompletedProcess([], 0, "refs/heads/release/v1\n", ""),
+            subprocess.CompletedProcess(
+                [], 0, "refs/heads/release/v1\0origin\0refs/heads/deploy/v1\n", ""
+            ),
+        ]
+        with patch("continuous_improvement.subprocess.run", side_effect=results):
+            target = _git_push_target(Path("/tmp/project"))
+
+        self.assertEqual(target, ("refs/heads/release/v1", "refs/heads/deploy/v1"))
+
+    def test_push_uses_atomic_exact_remote_lease(self) -> None:
+        baseline = "a" * 40
+        commit = "b" * 40
+        results = [
+            subprocess.CompletedProcess([], 0, f"{commit}\n", ""),
+            subprocess.CompletedProcess([], 0, f"{baseline}\trefs/heads/main\n", ""),
+            subprocess.CompletedProcess([], 0, "ok", ""),
+            subprocess.CompletedProcess([], 0, f"{commit}\trefs/heads/main\n", ""),
+        ]
+        with patch("continuous_improvement.subprocess.run", side_effect=results) as run:
+            pushed, error = _push_verified_commit(
+                Path("/tmp/project"), commit, baseline,
+                "refs/heads/main", "refs/heads/main",
+            )
+
+        self.assertTrue(pushed, error)
+        push_command = run.call_args_list[2].args[0]
+        self.assertIn(
+            f"--force-with-lease=refs/heads/main:{baseline}", push_command,
+        )
+        self.assertEqual(push_command[-1], f"{commit}:refs/heads/main")
+
+    def test_push_nonzero_exit_is_success_when_remote_readback_matches(self) -> None:
+        baseline = "a" * 40
+        commit = "b" * 40
+        results = [
+            subprocess.CompletedProcess([], 0, f"{commit}\n", ""),
+            subprocess.CompletedProcess([], 0, f"{baseline}\trefs/heads/main\n", ""),
+            subprocess.CompletedProcess([], 1, "", "connection lost"),
+            subprocess.CompletedProcess([], 0, f"{commit}\trefs/heads/main\n", ""),
+        ]
+        with patch("continuous_improvement.subprocess.run", side_effect=results):
+            pushed, error = _push_verified_commit(
+                Path("/tmp/project"), commit, baseline,
+                "refs/heads/main", "refs/heads/main",
+            )
+
+        self.assertTrue(pushed, error)
+
+    def test_promotion_cas_rejects_bound_branch_movement(self) -> None:
+        baseline = "a" * 40
+        commit = "b" * 40
+        candidate = Path("/tmp/candidate")
+        results = [
+            subprocess.CompletedProcess([], 0, "", ""),
+            subprocess.CompletedProcess([], 0, f"{commit} {baseline}\n", ""),
+            subprocess.CompletedProcess([], 0, "refs/heads/main\n", ""),
+            subprocess.CompletedProcess([], 0, "", ""),
+            subprocess.CompletedProcess([], 1, "", "cannot lock ref"),
+        ]
+        with patch("continuous_improvement._git_is_clean", return_value=True), patch(
+            "continuous_improvement.subprocess.run", side_effect=results
+        ) as run:
+            promoted, error = _promote_verified_commit(
+                Path("/tmp/project"), candidate, commit, baseline, "refs/heads/main"
+            )
+
+        self.assertFalse(promoted)
+        self.assertIn("changed", error)
+        self.assertEqual(
+            run.call_args_list[-1].args[0],
+            ["git", "update-ref", "refs/heads/main", commit, baseline],
+        )
+
+    def test_push_verified_commit_fails_closed_without_origin(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            subprocess.run(["git", "init", "-q", "-b", "main"], cwd=root, check=True)
+            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=root, check=True)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=root, check=True)
+            (root / "app.py").write_text("VALUE = 1\n", encoding="utf-8")
+            subprocess.run(["git", "add", "app.py"], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-qm", "baseline"], cwd=root, check=True)
+            commit = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=root,
+                capture_output=True, text=True, check=True,
+            ).stdout.strip()
+
+            pushed, error = _push_verified_commit(
+                root, commit, commit, "refs/heads/main", "refs/heads/main"
+            )
+
+        self.assertFalse(pushed)
+        self.assertTrue(error)
+
     def test_verification_git_control_tampering_blocks_improvement_promotion(self) -> None:
         signal = ImprovementSignal("quality", "응답 품질", "근거", ["테스트"], {"score": 5})
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -38,6 +155,9 @@ class ContinuousImprovementTests(unittest.TestCase):
             completed = subprocess.CompletedProcess([], 0, "done", "")
             with patch("continuous_improvement._git_is_clean", return_value=True), patch(
                 "continuous_improvement._git_head", return_value="base123"
+            ), patch(
+                "continuous_improvement._git_push_target",
+                return_value=("refs/heads/main", "refs/heads/main"),
             ), patch("continuous_improvement.sandbox_runner_available", return_value=True), patch(
                 "continuous_improvement.run_sandboxed_hermes", return_value=completed
             ), patch("continuous_improvement._create_worktree", return_value=root), patch(
@@ -70,11 +190,15 @@ class ContinuousImprovementTests(unittest.TestCase):
         self.assertEqual(saved["status"], "pending")
 
     @unittest.skipIf(os.getenv("NIHONGO_SANDBOX_ACTIVE") == "1", "host integration")
-    def test_verified_improvement_from_isolated_clone_is_committed(self) -> None:
+    def test_verified_improvement_is_committed_and_pushed_to_origin(self) -> None:
         signal = ImprovementSignal("quality", "응답 품질", "근거", ["테스트"], {"score": 5})
         with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
-            subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+            parent = Path(temp_dir)
+            root = parent / "project"
+            remote = parent / "remote.git"
+            root.mkdir()
+            subprocess.run(["git", "init", "--bare", "-q", str(remote)], check=True)
+            subprocess.run(["git", "init", "-q", "-b", "main"], cwd=root, check=True)
             subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=root, check=True)
             subprocess.run(["git", "config", "user.name", "Test"], cwd=root, check=True)
             (root / ".gitignore").write_text("scratch/\n", encoding="utf-8")
@@ -83,6 +207,8 @@ class ContinuousImprovementTests(unittest.TestCase):
             (root / "tests" / "test_app.py").write_text("# baseline\n", encoding="utf-8")
             subprocess.run(["git", "add", "-A"], cwd=root, check=True)
             subprocess.run(["git", "commit", "-qm", "baseline"], cwd=root, check=True)
+            subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=root, check=True)
+            subprocess.run(["git", "push", "-qu", "origin", "main"], cwd=root, check=True)
             proposal = create_proposal(
                 signal, state_dir=root / "scratch" / "improvement",
                 project_root=root, notify=False,
@@ -109,6 +235,15 @@ class ContinuousImprovementTests(unittest.TestCase):
                 ["git", "log", "-1", "--pretty=%s", "--grep", proposal["id"]],
                 cwd=root, capture_output=True, text=True, check=True,
             ).stdout.strip())
+            local_head = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=root,
+                capture_output=True, text=True, check=True,
+            ).stdout.strip()
+            remote_head = subprocess.run(
+                ["git", "rev-parse", "refs/heads/main"], cwd=remote,
+                capture_output=True, text=True, check=True,
+            ).stdout.strip()
+            self.assertEqual(remote_head, local_head)
 
     def test_rejects_path_traversal_proposal_id(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -186,6 +321,9 @@ class ContinuousImprovementTests(unittest.TestCase):
                 )
             with patch("continuous_improvement._git_is_clean", return_value=True), patch(
                 "continuous_improvement._git_head", return_value="base123"
+            ), patch(
+                "continuous_improvement._git_push_target",
+                return_value=("refs/heads/main", "refs/heads/main"),
             ), patch("continuous_improvement.sandbox_runner_available", return_value=True), patch(
                 "continuous_improvement.run_sandboxed_hermes", return_value=failed
             ), patch(
