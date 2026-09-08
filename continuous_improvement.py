@@ -302,7 +302,7 @@ def _git_push_target(root: Path) -> tuple[str, str, str] | None:
 def _promote_verified_commit(
     root: Path, candidate: Path, commit: str, baseline: str, target_ref: str
 ) -> tuple[bool, str]:
-    """Apply a verified child commit and CAS the bound local branch ref."""
+    """Fast-forward to a verified direct child without clobbering local edits."""
     if (
         not all(re.fullmatch(r"[0-9a-f]{40}", value) for value in (commit, baseline))
         or not target_ref.startswith("refs/heads/")
@@ -330,32 +330,16 @@ def _promote_verified_commit(
         or not _git_is_clean(root)
     ):
         return False, "checked-out branch or worktree changed during verification"
-    if not _git_is_clean(root):
-        return False, "worktree changed immediately before promotion"
     promoted = subprocess.run(
-        ["git", "update-ref", target_ref, commit, baseline], cwd=root,
+        [
+            "git", "-c", "core.hooksPath=/dev/null", "merge",
+            "--ff-only", "--no-edit", commit,
+        ],
+        cwd=root,
         capture_output=True, text=True, check=False,
     )
     if promoted.returncode != 0:
-        return False, "bound local branch changed before promotion completed"
-    applied = subprocess.run(
-        ["git", "reset", "--hard", commit], cwd=root,
-        capture_output=True, text=True, check=False,
-    )
-    if applied.returncode != 0:
-        rolled_back = subprocess.run(
-            ["git", "update-ref", target_ref, baseline, commit], cwd=root,
-            capture_output=True, text=True, check=False,
-        )
-        if rolled_back.returncode != 0:
-            return False, "could not restore worktree after promotion failed"
-        restored = subprocess.run(
-            ["git", "reset", "--hard", baseline], cwd=root,
-            capture_output=True, text=True, check=False,
-        )
-        if restored.returncode != 0 or not _git_is_clean(root):
-            return False, "could not restore worktree after promotion failed"
-        return False, "could not apply verified commit"
+        return False, "could not fast-forward verified commit without overwriting local work"
     current_branch = subprocess.run(
         ["git", "symbolic-ref", "--quiet", "HEAD"], cwd=root,
         capture_output=True, text=True, check=False,
@@ -363,13 +347,10 @@ def _promote_verified_commit(
     if (
         current_branch.returncode != 0
         or current_branch.stdout.strip() != target_ref
+        or _git_head(root) != commit
         or not _git_is_clean(root)
     ):
-        subprocess.run(
-            ["git", "update-ref", target_ref, baseline, commit], cwd=root,
-            capture_output=True, text=True, check=False,
-        )
-        return False, "checked-out branch changed while promotion completed"
+        return False, "local branch or worktree diverged while promotion completed"
     return True, ""
 
 
@@ -431,7 +412,10 @@ def _push_verified_commit(
             or current_branch.stdout.strip() != target_ref
             or not _git_is_clean(root)
         ):
-            return False, "remote verified but local branch or worktree diverged after push"
+            return False, (
+                "remote_pushed_local_diverged: remote verified but local branch "
+                "or worktree diverged after push"
+            )
         return True, ""
     if push.returncode != 0:
         return False, (push.stderr or push.stdout or "git push failed")[-2000:]
@@ -444,8 +428,13 @@ def _finish_failed_push(
     proposal: dict[str, Any], state_dir: Path, commit: str, error: str, *, notify: bool
 ) -> bool:
     """Record and report a recoverable push or local-state mismatch."""
+    status = (
+        "pushed_local_diverged"
+        if error.startswith("remote_pushed_local_diverged:")
+        else "push_failed"
+    )
     proposal.update(
-        status="push_failed", finished_at=datetime.now(timezone.utc).isoformat(),
+        status=status, finished_at=datetime.now(timezone.utc).isoformat(),
         commit=commit, error=error,
     )
     try:

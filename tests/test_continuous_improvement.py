@@ -59,6 +59,18 @@ class ContinuousImprovementTests(unittest.TestCase):
         self.assertIn("상태 기록 실패", notify.call_args.args[0])
         self.assertIn("수동", notify.call_args.args[0])
 
+    def test_remote_success_with_local_divergence_has_distinct_terminal_state(self) -> None:
+        proposal = {"id": "IMP-20260907-aaaaaaaa", "status": "verified"}
+        with patch("continuous_improvement._save_proposal"):
+            result = _finish_failed_push(
+                proposal, Path("/tmp/state"), "b" * 40,
+                "remote_pushed_local_diverged: worktree changed", notify=False,
+            )
+
+        self.assertFalse(result)
+        self.assertEqual(proposal["status"], "pushed_local_diverged")
+        self.assertEqual(proposal["commit"], "b" * 40)
+
     def test_push_target_binds_full_checked_out_branch_and_origin_upstream(self) -> None:
         results = [
             subprocess.CompletedProcess([], 0, "refs/heads/release/v1\n", ""),
@@ -158,8 +170,7 @@ class ContinuousImprovementTests(unittest.TestCase):
             )
 
         self.assertFalse(pushed)
-        self.assertIn("remote", error)
-        self.assertIn("local", error)
+        self.assertTrue(error.startswith("remote_pushed_local_diverged:"))
 
     def test_push_remote_success_reports_post_push_dirty_worktree(self) -> None:
         baseline = "a" * 40
@@ -184,7 +195,7 @@ class ContinuousImprovementTests(unittest.TestCase):
         self.assertIn("worktree", error)
         clean.assert_called_once_with(Path("/tmp/project"))
 
-    def test_promotion_cas_rejects_bound_branch_movement(self) -> None:
+    def test_promotion_rejects_failed_fast_forward(self) -> None:
         baseline = "a" * 40
         commit = "b" * 40
         candidate = Path("/tmp/candidate")
@@ -192,7 +203,7 @@ class ContinuousImprovementTests(unittest.TestCase):
             subprocess.CompletedProcess([], 0, "", ""),
             subprocess.CompletedProcess([], 0, f"{commit} {baseline}\n", ""),
             subprocess.CompletedProcess([], 0, "refs/heads/main\n", ""),
-            subprocess.CompletedProcess([], 1, "", "cannot lock ref"),
+            subprocess.CompletedProcess([], 1, "", "not possible to fast-forward"),
         ]
         with patch("continuous_improvement._git_is_clean", return_value=True), patch(
             "continuous_improvement.subprocess.run", side_effect=results
@@ -202,23 +213,23 @@ class ContinuousImprovementTests(unittest.TestCase):
             )
 
         self.assertFalse(promoted)
-        self.assertIn("changed", error)
+        self.assertIn("fast-forward", error)
         self.assertEqual(
             run.call_args_list[-1].args[0],
-            ["git", "update-ref", "refs/heads/main", commit, baseline],
+            [
+                "git", "-c", "core.hooksPath=/dev/null", "merge",
+                "--ff-only", "--no-edit", commit,
+            ],
         )
 
-    def test_failed_promotion_rollback_cas_never_resets_concurrent_work(self) -> None:
+    def test_failed_promotion_never_hard_resets_concurrent_work(self) -> None:
         baseline = "a" * 40
         commit = "b" * 40
         results = [
             subprocess.CompletedProcess([], 0, "", ""),
             subprocess.CompletedProcess([], 0, f"{commit} {baseline}\n", ""),
             subprocess.CompletedProcess([], 0, "refs/heads/main\n", ""),
-            subprocess.CompletedProcess([], 0, "", ""),
-            subprocess.CompletedProcess([], 1, "", "reset failed"),
-            subprocess.CompletedProcess([], 1, "", "ref moved"),
-            subprocess.CompletedProcess([], 0, "", ""),
+            subprocess.CompletedProcess([], 1, "", "local changes would be overwritten"),
         ]
         with patch("continuous_improvement._git_is_clean", return_value=True), patch(
             "continuous_improvement.subprocess.run", side_effect=results
@@ -229,15 +240,12 @@ class ContinuousImprovementTests(unittest.TestCase):
             )
 
         self.assertFalse(promoted)
-        self.assertIn("restore", error)
+        self.assertIn("fast-forward", error)
         commands = [call.args[0] for call in run.call_args_list]
-        self.assertEqual(
-            commands[-1],
-            ["git", "update-ref", "refs/heads/main", baseline, commit],
-        )
-        self.assertNotIn(["git", "reset", "--hard", baseline], commands)
+        self.assertTrue(any(command[-3:-1] == ["--ff-only", "--no-edit"] for command in commands))
+        self.assertFalse(any(command[:3] == ["git", "reset", "--hard"] for command in commands))
 
-    def test_promotion_cas_failure_preserves_head_index_worktree_and_sequencer(self) -> None:
+    def test_failed_fast_forward_preserves_head_index_worktree_and_sequencer(self) -> None:
         real_run = subprocess.run
         with tempfile.TemporaryDirectory() as temp_dir:
             parent = Path(temp_dir)
@@ -274,12 +282,12 @@ class ContinuousImprovementTests(unittest.TestCase):
 
             before = state()
 
-            def reject_update_ref(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
-                if command[:2] == ["git", "update-ref"]:
-                    return subprocess.CompletedProcess(command, 1, "", "cannot lock ref")
+            def reject_merge(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+                if "merge" in command:
+                    return subprocess.CompletedProcess(command, 1, "", "not possible to fast-forward")
                 return real_run(command, **kwargs)
 
-            with patch("continuous_improvement.subprocess.run", side_effect=reject_update_ref):
+            with patch("continuous_improvement.subprocess.run", side_effect=reject_merge):
                 promoted, _ = _promote_verified_commit(
                     root, candidate, commit, baseline, "refs/heads/main"
                 )
@@ -288,7 +296,7 @@ class ContinuousImprovementTests(unittest.TestCase):
         self.assertFalse(promoted)
         self.assertEqual(after, before)
 
-    def test_promotion_refuses_concurrent_edit_after_clean_check(self) -> None:
+    def test_promotion_preserves_concurrent_edit_after_last_clean_check(self) -> None:
         real_run = subprocess.run
         with tempfile.TemporaryDirectory() as temp_dir:
             parent = Path(temp_dir)
