@@ -836,7 +836,7 @@ async def furigana(req: TranslateRequest, bg_tasks: BackgroundTasks):
 
 # Difficulty Prompts
 BEGINNER_PROMPT = "Speak in simple, polite, concise Japanese (1-2 sentences, です・ます form)."
-INTERMEDIATE_PROMPT = "Speak in natural everyday conversational Japanese (1-2 sentences)."
+INTERMEDIATE_PROMPT = "Speak in natural, grammatically correct everyday conversational Japanese (1-2 sentences)."
 ADVANCED_PROMPT = "Speak in fluent, native-level Japanese (1-2 sentences)."
 
 DIFFICULTY_PROMPTS = {
@@ -861,7 +861,7 @@ SYSTEM_PROMPT_TEMPLATE = """You are "{partner_name}", a friendly native Japanese
 {difficulty_prompt}
 Topic: {topic_prompt}
 
-- Chat naturally in brief Japanese (1-2 sentences max).
+- Chat in grammatically correct, natural Japanese (1-2 sentences max).
 - Do NOT include bracketed readings in your reply.
 - Reply ONLY in Japanese. Never mix in English words or sentences.
 - Answer the user's message directly and stay on the conversation topic.
