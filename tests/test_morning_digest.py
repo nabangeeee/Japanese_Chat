@@ -5,13 +5,33 @@ import tempfile
 import unittest
 from datetime import datetime
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from zoneinfo import ZoneInfo
 
-from morning_digest import format_digest, generate_digest, parse_vocabulary_response
+from morning_digest import (
+    _generate_content_with_retry,
+    format_digest,
+    generate_digest,
+    parse_vocabulary_response,
+)
 
 
 class MorningDigestTests(unittest.TestCase):
+    def test_transient_unavailable_is_retried_before_success(self) -> None:
+        expected = object()
+        client = Mock()
+        client.models.generate_content.side_effect = [
+            RuntimeError("503 UNAVAILABLE: high demand"),
+            expected,
+        ]
+
+        with patch("morning_digest.time.sleep") as sleep:
+            result = _generate_content_with_retry(client, "prompt", object())
+
+        self.assertIs(result, expected)
+        self.assertEqual(client.models.generate_content.call_count, 2)
+        sleep.assert_called_once_with(2.0)
+
     def test_same_day_retry_reuses_persisted_payload_without_gemini(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

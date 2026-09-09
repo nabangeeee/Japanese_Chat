@@ -88,6 +88,21 @@ def recent_conversation_text(db_path: Path, limit: int = 80) -> str:
     return "\n".join(f"{role}: {content}" for role, content in reversed(rows))
 
 
+def _generate_content_with_retry(client: Any, prompt: str, config: Any) -> Any:
+    """Retry temporary Gemini capacity failures with bounded backoff."""
+    for attempt in range(3):
+        try:
+            return client.models.generate_content(
+                model="gemini-3.5-flash", contents=prompt, config=config,
+            )
+        except Exception as exc:
+            message = str(exc).upper()
+            transient = "503" in message or "UNAVAILABLE" in message
+            if not transient or attempt == 2:
+                raise
+            time.sleep(2.0 * (attempt + 1))
+
+
 def generate_digest(*, project_root: Path = ROOT) -> str:
     digest_dir = project_root / "scratch" / "digests"
     digest_dir.mkdir(parents=True, exist_ok=True)
@@ -132,10 +147,10 @@ Return only a JSON array with keys: source_form, word, reading, meaning_ko, exam
         client = genai.Client(api_key=api_key)
         last_error: Exception | None = None
         for _ in range(2):
-            response = client.models.generate_content(
-                model="gemini-3.5-flash",
-                contents=prompt,
-                config=types.GenerateContentConfig(
+            response = _generate_content_with_retry(
+                client,
+                prompt,
+                types.GenerateContentConfig(
                     temperature=0.1,
                     max_output_tokens=6000,
                     response_mime_type="application/json",
