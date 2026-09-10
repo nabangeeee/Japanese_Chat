@@ -174,25 +174,26 @@ def get_system_prompt(partner_name: str, difficulty: str, topic: str, roleplay_i
         memory_instruction = f"\n\n[Learner's Past Weaknesses & Memory Notes]\nThe learner previously made these mistakes. If natural, gently help them practice these grammar points:\n" + "\n".join(mem_lines)
 
     # 장기 메모리 요약본 및 유저 프로필 팩트 동적 주입
+    # 유저 팩트는 한 번만 조회하여 장기 메모리와 피드백 규칙 모두에 재사용한다.
+    facts = get_all_user_facts()
+
     long_term_instruction = ""
     if session_id:
         sess_summary = get_session_summary(session_id)
-        facts = get_all_user_facts()
-        
+
         lt_parts = []
         if sess_summary:
             lt_parts.append(f"Session Context Summary: {sess_summary}")
         if facts:
             fact_str = ", ".join([f"{f['fact_key']}={f['fact_value']}" for f in facts])
             lt_parts.append(f"Known Learner Profile/Facts: {fact_str}")
-            
+
         if lt_parts:
             long_term_instruction = f"\n\n[Long-term Memory & Learner Context]\n" + "\n".join(lt_parts)
 
-    # 유저 피드백 기반 금지/개선 규칙 동적 주입 (최신 중복 제거 2개로 제한하여 55초 병목 해소)
+    # 유저 피드백 기반 금지/개선 규칙 동적 주입 (최신 중복 제거 2개로 제한)
     feedback_instruction = ""
-    all_facts = get_all_user_facts()
-    disliked_rules = [f["fact_value"] for f in all_facts if f["fact_key"].startswith("disliked_pattern_")]
+    disliked_rules = [f["fact_value"] for f in facts if f["fact_key"].startswith("disliked_pattern_")]
     if disliked_rules:
         # 중복 규칙 제거 후 최신 2개만 프롬프트 주입
         unique_rules = list(dict.fromkeys(disliked_rules))
