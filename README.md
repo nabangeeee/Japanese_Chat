@@ -1,10 +1,10 @@
 # 🇯🇵 NihongoChat (日本語 Chat)
 
-> **AI Japanese Learning Agent with Gemini chat, Telegram study automation, and approval-gated Hermes Agent maintenance**
+> **AI Japanese Learning Agent with OpenAI GPT-6 Astra chat, Telegram study automation, and approval-gated Hermes Agent maintenance**
 
 ![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-009688?style=for-the-badge&logo=fastapi&logoColor=white)
-![Gemini](https://img.shields.io/badge/Google_Gemini_3.5_Flash-8E75B2?style=for-the-badge&logo=google&logoColor=white)
+![OpenAI](https://img.shields.io/badge/OpenAI_GPT--6_Astra-412991?style=for-the-badge&logo=openai&logoColor=white)
 ![Hermes Agent](https://img.shields.io/badge/Hermes_Agent-Autonomous_Repair-black?style=for-the-badge)
 ![Langfuse](https://img.shields.io/badge/Langfuse_Observability-FF4500?style=for-the-badge&logo=langfuse&logoColor=white)
 
@@ -14,18 +14,19 @@
 
 **NihongoChat** is a Japanese-learning chat service with three deliberately separated automation systems: the chat application, a daily Telegram study digest, and guarded code maintenance.
 
-Gemini handles chat and learning utilities. Runtime failures can start a bounded Hermes repair, while quality and performance signals create proposals that require explicit Telegram approval before Hermes may edit or commit code.
+OpenAI `gpt-6-astra` handles chat, learning utilities, quality review, and the daily vocabulary digest through the Responses API. Runtime code failures can start a bounded Hermes repair, while quality and performance signals create proposals that require explicit Telegram approval before Hermes may edit or commit code. Provider authentication, capacity, and response failures return sanitized errors rather than triggering code repair.
 
 ---
 
 ## 🔥 Key Architectural Features
 
-### 1. ⚡ Asynchronous Pipeline Redesign (5s Response Latency)
+### 1. ⚡ Asynchronous Pipeline Redesign
 - Replaced synchronous `[Chat ➔ Translation ➔ Furigana]` execution with an **instant chat output pipeline**.
 - Translation and readings (Furigana) are fetched asynchronously in parallel via `Promise.all`, cutting user-perceived latency from **11s down to 5s (54% Reduction)**.
+- These are historical pipeline measurements, not a latency guarantee for the newly selected GPT-6 Astra model.
 
 ### 2. ☁️ Asynchronous Learning Utilities
-- Gemini executes session summarization, grammar error extraction, and negative-feedback analysis through FastAPI `BackgroundTasks`.
+- OpenAI executes session summarization, grammar error extraction, and negative-feedback analysis through FastAPI `BackgroundTasks`.
 - No on-device model server or model weights are required.
 
 ### 3. ⚙️ Hermes Agent Self-Healing Loop (Autonomous Code Repair)
@@ -64,7 +65,7 @@ Gemini handles chat and learning utilities. Runtime failures can start a bounded
 
 ### 8. 💬 Human-in-the-Loop Feedback Self-Refinement
 - Captures **thumbs up (👍) / thumbs down (👎)** user feedback.
-- Gemini analyzes explicit negative-feedback reasons into 1-sentence behavioral rules (`disliked_pattern_...`), which are injected into subsequent system prompts.
+- OpenAI analyzes explicit negative-feedback reasons into 1-sentence behavioral rules (`disliked_pattern_...`), which are injected into subsequent system prompts.
 
 ---
 
@@ -79,11 +80,11 @@ Gemini handles chat and learning utilities. Runtime failures can start a bounded
    │  ├── Security Guardrail (Prompt Injection Scan & Output Redaction)
    │  ├── MCP Prompts Module (mcp_prompts.py)
    │  ├── Langfuse Observability (@observe Tracing)
-   │  └── Agentic Tool-Calling (Google Search Tool)
+   │  └── Agentic Tool-Calling (OpenAI Web Search)
    ▼
 3. AI Engine Layer
-   │  ├── ☁️ Google Gemini 3.5 Flash (Main Chat & Fast Output)
-   │  ├── ☁️ Google Gemini (Background Summary / Grammar / Feedback)
+   │  ├── ☁️ OpenAI GPT-6 Astra (Chat / Translation / Furigana / Personas)
+   │  ├── ☁️ OpenAI GPT-6 Astra (Summary / Grammar / Feedback / Judge / Digest)
    │  └── ⚙️ Hermes Agent CLI (Runtime Repair + Approved Improvements)
    ▼
 4. Persistence Layer (database.py)
@@ -97,6 +98,7 @@ Gemini handles chat and learning utilities. Runtime failures can start a bounded
 ```text
 Japanese/
 ├── main.py                     # FastAPI gateway, routes & background task orchestrator
+├── llm_provider.py             # OpenAI Responses adapter, bounded retries & output validation
 ├── autonomous_repair.py        # Runtime exception → Hermes Agent repair runner
 ├── runtime_repair_worker.py    # Durable incident queue maintenance worker
 ├── continuous_improvement.py   # Metrics → approval → verified commit → origin push
@@ -122,6 +124,7 @@ Japanese/
 
 ### 1. Prerequisites
 - Python 3.11+
+- Node.js for the frontend regression tests (the application server itself only needs Python)
 - [Hermes Agent](https://hermes-agent.nousresearch.com/docs/) installed and authenticated for autonomous repair
 
 ### 2. Environment Setup & Installation
@@ -134,11 +137,15 @@ pip install -r requirements.txt
 ### 3. Environment Variables (`.env`)
 Create a `.env` file in the project root:
 ```env
-GEMINI_API_KEY="your-google-gemini-api-key"
+OPENAI_API_KEY="your-openai-api-key"
 LANGFUSE_PUBLIC_KEY="pk-lf-..."
 LANGFUSE_SECRET_KEY="sk-lf-..."
 LANGFUSE_HOST="https://us.cloud.langfuse.com"
 ```
+
+The application model is `gpt-6-astra` in `llm_provider.py`. The key must have API access to this model and available billing quota; ChatGPT subscriptions do not cover API usage. Requests use low reasoning effort and `store=False`. Transient network/capacity failures have at most three attempts with bounded backoff; authentication failures are not retried. Keep `.env` local and never commit it. This application key does not change the separate Hermes repair provider or credentials.
+
+Run the offline regression suite with `.venv/bin/python -m unittest discover -s tests -v`.
 
 ### 4. Launch Application Server
 ```bash

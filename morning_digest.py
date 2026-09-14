@@ -9,25 +9,30 @@ import sqlite3
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+
 from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
-from google import genai
-from google.genai import types
-from pydantic import BaseModel
+from llm_provider import generate_text
+from pydantic import BaseModel, ConfigDict, Field
 
 ROOT = Path(__file__).resolve().parent
 REQUIRED_FIELDS = ("word", "reading", "meaning_ko", "example_ja", "example_ko")
 
 
 class VocabularyItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     source_form: str
     word: str
     reading: str
     meaning_ko: str
     example_ja: str
     example_ko: str
+
+
+class VocabularyDigest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    items: list[VocabularyItem] = Field(min_length=10, max_length=10)
 
 
 def parse_vocabulary_response(
@@ -88,20 +93,6 @@ def recent_conversation_text(db_path: Path, limit: int = 80) -> str:
     return "\n".join(f"{role}: {content}" for role, content in reversed(rows))
 
 
-def _generate_content_with_retry(client: Any, prompt: str, config: Any) -> Any:
-    """Retry temporary Gemini capacity failures with bounded backoff."""
-    for attempt in range(3):
-        try:
-            return client.models.generate_content(
-                model="gemini-3.5-flash", contents=prompt, config=config,
-            )
-        except Exception as exc:
-            message = str(exc).upper()
-            transient = "503" in message or "UNAVAILABLE" in message
-            if not transient or attempt == 2:
-                raise
-            time.sleep(2.0 * (attempt + 1))
-
 
 def generate_digest(*, project_root: Path = ROOT) -> str:
     digest_dir = project_root / "scratch" / "digests"
@@ -115,9 +106,9 @@ def generate_digest(*, project_root: Path = ROOT) -> str:
             return str(json.loads(digest_path.read_text(encoding="utf-8"))["message"])
 
         load_dotenv(project_root / ".env")
-        api_key = os.getenv("GEMINI_API_KEY")
+        api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
-            raise RuntimeError("GEMINI_API_KEY is not configured")
+            raise RuntimeError("OPENAI_API_KEY is not configured")
         dialogue = recent_conversation_text(project_root / "nihongo_chat.db")
         if not dialogue:
             raise RuntimeError("No saved conversation is available for the morning digest")
@@ -138,28 +129,22 @@ def generate_digest(*, project_root: Path = ROOT) -> str:
 Prefer words useful to this learner. Do not invent a source word that is absent from the conversation.
 Do not select any previously sent dictionary-form word in this list: {excluded}
 For each word, provide source_form (the exact text span copied from the conversation), dictionary-form word, a hiragana-only reading, concise Korean meaning, one natural Japanese example, and Korean translation.
-Return only a JSON array with keys: source_form, word, reading, meaning_ko, example_ja, example_ko.
+Return a JSON object with an items array. Each item has keys: source_form, word, reading, meaning_ko, example_ja, example_ko.
 
 --- BEGIN UNTRUSTED CONVERSATION ---
 {dialogue[-18000:]}
 --- END UNTRUSTED CONVERSATION ---
 """
-        client = genai.Client(api_key=api_key)
         last_error: Exception | None = None
         for _ in range(2):
-            response = _generate_content_with_retry(
-                client,
-                prompt,
-                types.GenerateContentConfig(
-                    temperature=0.1,
-                    max_output_tokens=6000,
-                    response_mime_type="application/json",
-                    response_schema=list[VocabularyItem],
-                ),
+            raw = generate_text(
+                api_key, prompt, max_output_tokens=6000,
+                json_schema=VocabularyDigest.model_json_schema(),
             )
             try:
+                structured = VocabularyDigest.model_validate_json(raw)
                 items = parse_vocabulary_response(
-                    response.text or "", source_text=dialogue,
+                    json.dumps([item.model_dump() for item in structured.items]), source_text=dialogue,
                     excluded_words=previous_words,
                 )
                 message = format_digest(items)

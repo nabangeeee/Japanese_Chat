@@ -38,13 +38,11 @@ class QualityReviewTests(unittest.TestCase):
 
     @patch("main.record_quality_incident")
     @patch("main.update_message_quality_score")
-    @patch("main.genai.Client")
+    @patch("main.generate_text")
     def test_low_score_is_saved_as_observation_only(
         self, client_class, update_score, record_incident
     ) -> None:
-        client_class.return_value.models.generate_content.return_value = SimpleNamespace(
-            text='{"score": 2.0, "reason": "대화 맥락과 무관한 영어 답변"}'
-        )
+        client_class.return_value = '{"score": 2.0, "reason": "대화 맥락과 무관한 영어 답변"}'
 
         review_response_quality_background(
             "api-key",
@@ -65,13 +63,11 @@ class QualityReviewTests(unittest.TestCase):
 
     @patch("main.record_quality_incident")
     @patch("main.update_message_quality_score")
-    @patch("main.genai.Client")
+    @patch("main.generate_text")
     def test_acceptable_score_does_not_create_quality_incident(
         self, client_class, update_score, record_incident
     ) -> None:
-        client_class.return_value.models.generate_content.return_value = SimpleNamespace(
-            text='{"score": 9.0, "reason": "자연스럽고 맥락에 맞음"}'
-        )
+        client_class.return_value = '{"score": 9.0, "reason": "자연스럽고 맥락에 맞음"}'
 
         review_response_quality_background(
             "api-key",

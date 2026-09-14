@@ -135,6 +135,9 @@ function loadSettings() {
     if (saved) {
         state.settings = { ...state.settings, ...JSON.parse(saved) };
     }
+    // Credentials are server-managed; discard keys saved by older providers.
+    state.settings.apiKey = '';
+    localStorage.setItem('nihongoSettings', JSON.stringify(state.settings));
     applySettingsToUI();
 }
 
@@ -611,7 +614,7 @@ function createMessageHTML(message) {
                 <div class="avatar">🇯🇵</div>
                 <div class="bubble-container">
                     <div class="bubble" onclick="toggleDetails('${message.id}')">
-                        ${escapeHTML(message.content)}
+                        ${renderAssistantText(message.content)}
                         <div class="bubble-details" id="details-${message.id}" ${hasDetails ? '' : ''}>
                             ${message.furigana && state.settings.showFurigana ? `
                                 <div class="detail-section">
@@ -679,6 +682,20 @@ function escapeHTML(str) {
     const div = document.createElement('div');
     div.textContent = str;
     return div.innerHTML;
+}
+
+function renderAssistantText(text) {
+    // Only canonical HTTP(S) source links become HTML; all prose stays escaped.
+    const pattern = /\[出典 (\d+)\]\((https?:\/\/[^\s)]+)\)/g;
+    let html = '';
+    let end = 0;
+    for (const match of text.matchAll(pattern)) {
+        html += escapeHTML(text.slice(end, match.index));
+        const href = escapeHTML(match[2]).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        html += `<a href="${href}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">出典 ${match[1]}</a>`;
+        end = match.index + match[0].length;
+    }
+    return html + escapeHTML(text.slice(end));
 }
 
 function isValidFurigana(reading, source) {

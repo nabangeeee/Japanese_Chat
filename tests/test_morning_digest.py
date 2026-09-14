@@ -9,7 +9,7 @@ from unittest.mock import Mock, patch
 from zoneinfo import ZoneInfo
 
 from morning_digest import (
-    _generate_content_with_retry,
+
     format_digest,
     generate_digest,
     parse_vocabulary_response,
@@ -17,22 +17,27 @@ from morning_digest import (
 
 
 class MorningDigestTests(unittest.TestCase):
-    def test_transient_unavailable_is_retried_before_success(self) -> None:
-        expected = object()
-        client = Mock()
-        client.models.generate_content.side_effect = [
-            RuntimeError("503 UNAVAILABLE: high demand"),
-            expected,
-        ]
+    def test_openai_structured_digest_persists_and_revalidates(self) -> None:
+        import morning_digest
+        import os
+        self.assertTrue(hasattr(morning_digest, 'generate_text'), 'digest still uses old provider')
+        items = [{'source_form':f'単語{i}', 'word':f'単語{i}', 'reading':'たんご', 'meaning_ko':'단어', 'example_ja':'単語です。', 'example_ko':'단어입니다.'} for i in range(10)]
+        with tempfile.TemporaryDirectory() as temp_dir, patch.dict(os.environ, {'OPENAI_API_KEY':'key'}), patch('morning_digest.recent_conversation_text', return_value=' '.join(x['word'] for x in items)), patch('morning_digest.generate_text') as generate:
+            generate.side_effect = ['{"items": []}', json.dumps({'items':items})]
+            root = Path(temp_dir)
+            result = generate_digest(project_root=root)
+            self.assertIn('10단어', result)
+            self.assertEqual(generate.call_count, 2)
+            schema = generate.call_args.kwargs['json_schema']
+            self.assertFalse(schema['additionalProperties'])
+            self.assertFalse(schema['$defs']['VocabularyItem']['additionalProperties'])
+            saved = list((root/'scratch'/'digests').glob('????-??-??.json'))
+            self.assertEqual(len(saved), 1)
+            self.assertEqual(len(json.loads(saved[0].read_text())['items']), 10)
+            self.assertEqual(generate_digest(project_root=root), result)
+            self.assertEqual(generate.call_count, 2)
 
-        with patch("morning_digest.time.sleep") as sleep:
-            result = _generate_content_with_retry(client, "prompt", object())
-
-        self.assertIs(result, expected)
-        self.assertEqual(client.models.generate_content.call_count, 2)
-        sleep.assert_called_once_with(2.0)
-
-    def test_same_day_retry_reuses_persisted_payload_without_gemini(self) -> None:
+    def test_same_day_retry_reuses_persisted_payload_without_openai(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             digest_dir = root / "scratch" / "digests"
@@ -41,7 +46,7 @@ class MorningDigestTests(unittest.TestCase):
             (digest_dir / f"{day}.json").write_text(
                 json.dumps({"message": "same payload", "items": []}), encoding="utf-8"
             )
-            with patch("morning_digest.genai.Client") as client:
+            with patch("morning_digest.generate_text") as client:
                 result = generate_digest(project_root=root)
 
         self.assertEqual(result, "same payload")
