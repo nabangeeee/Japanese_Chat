@@ -183,6 +183,10 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(result['status'], 'proposed')
             self.assertEqual(len(result['comparisons']), 2)
             self.assertEqual(llm.optimizations, 1)
+            optimizer_instructions = next(instructions for _, instructions in llm.calls
+                                          if instructions.startswith('OPTIMIZER'))
+            self.assertIn('Write all instruction prose in English.', optimizer_instructions)
+            self.assertIn('Japanese is allowed only inside quoted examples.', optimizer_instructions)
             self.assertNotIn('heldout', llm.optimizer_input)
             for comparison in result['comparisons']:
                 self.assertEqual([x['learner'] for x in comparison['baseline']],

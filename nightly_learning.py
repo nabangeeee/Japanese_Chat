@@ -100,7 +100,9 @@ def run_nightly(*, project_root=Path(__file__).resolve().parent, llm=None):
             candidate = json.loads(generate(
                 {'system_prompt': base_prompt, 'development': dev},
                 'OPTIMIZER: Propose exactly one short additive teaching instruction from development '
-                'evidence only. Preserve ALL existing constraints. No role changes, relaxed constraints, '
+                'evidence only. Write all instruction prose in English. '
+                'Japanese is allowed only inside quoted examples. '
+                'Preserve ALL existing constraints. No role changes, relaxed constraints, '
                 'or scenario-specific answers. Return JSON with only append (max 600 characters).', 768))['append']
             if not isinstance(candidate, str) or not candidate.strip() or len(candidate) > 600:
                 raise ValueError('invalid candidate')
