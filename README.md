@@ -67,6 +67,16 @@ OpenAI `gpt-6-astra` handles chat, learning utilities, quality review, and the d
 - Captures **thumbs up (👍) / thumbs down (👎)** user feedback.
 - OpenAI analyzes explicit negative-feedback reasons into 1-sentence behavioral rules (`disliked_pattern_...`), which are injected into subsequent system prompts.
 
+### 9. 🌙 Approval-Gated Nightly Conversation Experiments
+- At 22:00 KST, a separate script runs synthetic learner/tutor conversations, proposes one additive prompt candidate, and compares it against the current prompt. It never reads real chat history, modifies the production database, or applies a candidate itself.
+- The initial scope is beginner café and travel conversations, two learner turns per scenario. Candidate generation sees only the development conversation; a separate held-out scenario is evaluated afterward. The paired comparison reuses learner utterances, randomizes A/B labels, and requires improvement with no regression on any scored axis in both scenarios.
+- All roles use `gpt-6-astra` in separate request contexts. This is same-model judging on a small sample, not model training or proof of general improvement. Translation, furigana, and long-term personalization are outside this initial nightly experiment.
+- The nightly request budget is at most **$1 per KST day**, guarded by an atomic, persistent reservation ledger. Request-size/output limits, standard service tier, no paid tools, no hidden SDK retries, and conservative token pricing bound each call before it starts. Interrupted requests retain their reservations; corrupt state stops spending rather than resetting the budget.
+- The local guard uses $13/M input tokens (rounding above the documented $12.50 cache-write rate) and $50/M output tokens for short-context requests. It is not an OpenAI account-wide billing limit; provider price changes require review. Ordinary user conversations and separately approved maintenance are not charged to this experiment ledger. Pricing reference: https://developers.openai.com/api/docs/pricing.
+- Reports, candidate text, comparisons, and budget state stay under ignored `scratch/nightly_learning/`. A completed report is reused on same-day reruns; interrupted work does not automatically start over. The run has a bounded wall-clock deadline.
+- Only a fully evaluated qualifying candidate on an unchanged clean Git baseline produces an existing `IMP-...` proposal. Its approval token binds the exact candidate and evidence stored in the proposal. Telegram approval is still required before the existing isolated repair/test/commit/push workflow may change the service.
+- Cron delivers the Korean report to Telegram even when there is no qualifying improvement. Generation and Telegram delivery status are separate; inspect both with `hermes cron list` and `hermes cron runs <job_id>`.
+
 ---
 
 ## 🏗️ System Architecture
@@ -99,6 +109,8 @@ OpenAI `gpt-6-astra` handles chat, learning utilities, quality review, and the d
 Japanese/
 ├── main.py                     # FastAPI gateway, routes & background task orchestrator
 ├── llm_provider.py             # OpenAI Responses adapter, bounded retries & output validation
+├── nightly_llm.py              # Persistent $1/day budget guard for synthetic experiments
+├── nightly_learning.py         # Synthetic dialogues, blinded comparison & approval proposals
 ├── autonomous_repair.py        # Runtime exception → Hermes Agent repair runner
 ├── runtime_repair_worker.py    # Durable incident queue maintenance worker
 ├── continuous_improvement.py   # Metrics → approval → verified commit → origin push
@@ -162,6 +174,7 @@ hermes cron list
 Default schedules use the Mac's local KST timezone:
 - `0 8 * * *`: 10-word morning digest → Telegram
 - `0 21 * * *`: improvement observer → Telegram only when a proposal exists
+- `0 22 * * *`: synthetic conversation experiment → Telegram report, approval required to apply
 
 Approved improvement commands are intentionally guarded:
 ```bash
