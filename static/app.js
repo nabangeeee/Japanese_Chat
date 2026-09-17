@@ -18,6 +18,7 @@ let state = {
 };
 
 let mcpPrompts = [];
+let draftRoleplayId = null;
 
 // 난이도/주제 한글 이름 매핑
 const DIFFICULTY_NAMES = {
@@ -78,7 +79,7 @@ function renderMcpPromptsUI() {
 
     let html = '';
     mcpPrompts.forEach(prompt => {
-        const isActive = prompt.id === state.settings.roleplayId || (!state.settings.roleplayId && prompt.id === null);
+        const isActive = prompt.id === draftRoleplayId || (!draftRoleplayId && prompt.id === null);
         html += `
             <div class="roleplay-card ${isActive ? 'active' : ''}" onclick="selectRoleplay(this, ${prompt.id ? `'${prompt.id}'` : 'null'})">
                 <div class="rp-card-header">
@@ -98,7 +99,7 @@ function selectRoleplay(element, promptId) {
     document.querySelectorAll('.roleplay-card').forEach(card => card.classList.remove('active'));
     element.classList.add('active');
     
-    state.settings.roleplayId = promptId;
+    draftRoleplayId = promptId;
     renderRoleplayArgsForm();
 }
 
@@ -106,7 +107,7 @@ function renderRoleplayArgsForm() {
     const argsContainer = document.getElementById('roleplayArgsContainer');
     if (!argsContainer) return;
 
-    const currentPrompt = mcpPrompts.find(p => p.id === state.settings.roleplayId);
+    const currentPrompt = mcpPrompts.find(p => p.id === draftRoleplayId);
     if (!currentPrompt || !currentPrompt.arguments || currentPrompt.arguments.length === 0) {
         argsContainer.style.display = 'none';
         argsContainer.innerHTML = '';
@@ -143,6 +144,7 @@ function loadSettings() {
 
 // 설정 UI에 적용
 function applySettingsToUI() {
+    draftRoleplayId = state.settings.roleplayId;
     document.getElementById('partnerName').value = state.settings.partnerName;
     document.getElementById('showTranslation').checked = state.settings.showTranslation;
     document.getElementById('showFurigana').checked = state.settings.showFurigana;
@@ -210,7 +212,7 @@ function saveSettings() {
             partnerName: partnerNameEl ? partnerNameEl.value : '유키',
             difficulty: newDifficulty,
             topic: 'free',
-            roleplayId: state.settings ? state.settings.roleplayId : null,
+            roleplayId: draftRoleplayId,
             roleplayArgs: roleplayArgs,
             showTranslation: showTransEl ? showTransEl.checked : true,
             showFurigana: showFuriEl ? showFuriEl.checked : true
@@ -920,6 +922,9 @@ function clearChat() {
 
 // 설정 모달
 function toggleSettings() {
+    if (!settingsModal.classList.contains('show')) {
+        applySettingsToUI();
+    }
     settingsModal.classList.toggle('show');
 }
 

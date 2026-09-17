@@ -10,6 +10,15 @@ APP_JS = (Path(__file__).resolve().parents[1] / "static" / "app.js").read_text(
 
 
 class FrontendSessionTests(unittest.TestCase):
+    def test_roleplay_settings_flow(self):
+        import subprocess
+        result = subprocess.run(
+            ['node', 'tests/roleplay_settings_harness.js'],
+            cwd=Path(__file__).resolve().parents[1],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_stale_provider_key_is_cleared_on_settings_load(self):
         source = APP_JS.split('function loadSettings()', 1)[1].split('function applySettingsToUI', 1)[0]
         self.assertIn("state.settings.apiKey = ''", source)
