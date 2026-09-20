@@ -24,5 +24,8 @@ Thumbs.db
 
 # SQLite DB & Scratch
 *.db
+*.db-wal
+*.db-shm
+*.db-journal
 nihongo_chat.db
 scratch/

@@ -179,6 +179,7 @@ def get_system_prompt(partner_name: str, difficulty: str, topic: str, roleplay_i
     # 장기 메모리 요약본 및 유저 프로필 팩트 동적 주입
     # 유저 팩트는 한 번만 조회하여 장기 메모리와 피드백 규칙 모두에 재사용한다.
     facts = get_all_user_facts()
+    profile_facts = [f for f in facts if not f["fact_key"].startswith("disliked_pattern_")]
 
     long_term_instruction = ""
     if session_id:
@@ -187,8 +188,8 @@ def get_system_prompt(partner_name: str, difficulty: str, topic: str, roleplay_i
         lt_parts = []
         if sess_summary:
             lt_parts.append(f"Session Context Summary: {sess_summary}")
-        if facts:
-            fact_str = ", ".join([f"{f['fact_key']}={f['fact_value']}" for f in facts])
+        if profile_facts:
+            fact_str = ", ".join([f"{f['fact_key']}={f['fact_value']}" for f in profile_facts])
             lt_parts.append(f"Known Learner Profile/Facts: {fact_str}")
 
         if lt_parts:
@@ -200,7 +201,7 @@ def get_system_prompt(partner_name: str, difficulty: str, topic: str, roleplay_i
     if disliked_rules:
         # 중복 규칙 제거 후 최신 2개만 프롬프트 주입
         unique_rules = list(dict.fromkeys(disliked_rules))
-        rule_lines = [f"- {r}" for r in unique_rules[-2:]]
+        rule_lines = [f"- {r}" for r in unique_rules[:2]]
         feedback_instruction = f"\n\n[Feedback-Based Refinement Rules]\nPast user feedback produced these refinement rules. STRICTLY FOLLOW THESE RULES:\n" + "\n".join(rule_lines)
 
     base_prompt = SYSTEM_PROMPT_TEMPLATE.format(
