@@ -5,6 +5,8 @@ let state = {
     currentSessionId: null,
     memories: [],
     isLoading: false,
+    isSavingSettings: false,
+    isSessionTransition: false,
     settings: {
         apiKey: '',
         partnerName: '유키',
@@ -186,7 +188,18 @@ function updateStatusBar() {
 }
 
 // 설정 저장
-function saveSettings() {
+async function saveSettings() {
+    if (state.isSavingSettings) return;
+    const errorEl = document.getElementById('settingsError');
+    if (state.isLoading || state.isSessionTransition) {
+        errorEl.textContent = '대화 처리가 끝난 뒤 다시 저장해 주세요.';
+        return;
+    }
+    state.isSavingSettings = true;
+    const saveButton = document.getElementById('saveSettingsBtn');
+    saveButton.disabled = true;
+    saveButton.textContent = '저장 중…';
+    errorEl.textContent = '';
     try {
         const partnerNameEl = document.getElementById('partnerName');
         const showTransEl = document.getElementById('showTranslation');
@@ -207,7 +220,7 @@ function saveSettings() {
             }
         });
 
-        state.settings = {
+        const nextSettings = {
             apiKey: '',
             partnerName: partnerNameEl ? partnerNameEl.value : '유키',
             difficulty: newDifficulty,
@@ -218,31 +231,36 @@ function saveSettings() {
             showFurigana: showFuriEl ? showFuriEl.checked : true
         };
         
-        localStorage.setItem('nihongoSettings', JSON.stringify(state.settings));
-        
         const settingsChanged = (
             prevDifficulty !== newDifficulty ||
-            prevRoleplayId !== state.settings.roleplayId ||
+            prevRoleplayId !== nextSettings.roleplayId ||
             JSON.stringify(prevRoleplayArgs) !== JSON.stringify(roleplayArgs)
         );
         
         if (settingsChanged) {
-            startNewSession(false);
-        } else if (state.messages.length === 0) {
-            addWelcomeMessage();
+            if (!await startNewSession(false, nextSettings)) {
+                throw new Error('Session creation failed');
+            }
+        } else {
+            state.settings = nextSettings;
+            if (state.messages.length === 0) addWelcomeMessage();
         }
-        
+        try {
+            localStorage.setItem('nihongoSettings', JSON.stringify(state.settings));
+        } catch (err) {
+            console.error('Settings cache write failed:', err);
+            alert('설정은 적용되었지만 이 브라우저에 저장하지 못했습니다. 새로고침하면 설정이 유지되지 않을 수 있습니다.');
+        }
         updateStatusBar();
+        settingsModal.classList.remove('show');
+        document.getElementById('settingsError').textContent = '';
     } catch (err) {
         console.error('Error saving settings:', err);
+        document.getElementById('settingsError').textContent = '설정을 저장하지 못했습니다. 연결을 확인하고 다시 저장해 주세요.';
     } finally {
-        // 어떤 경우에도 저장 버튼 클릭 시 설정 모달 100% 닫기 보장
-        const modal = document.getElementById('settingsModal');
-        if (modal) {
-            modal.classList.remove('show');
-            modal.style.display = 'none';
-            setTimeout(() => { modal.style.display = ''; }, 300);
-        }
+        state.isSavingSettings = false;
+        saveButton.disabled = false;
+        saveButton.textContent = '저장';
     }
 }
 
@@ -270,13 +288,15 @@ async function initSessionSystem() {
     }
 }
 
-async function startNewSession(closeDrawer = true) {
+async function startNewSession(closeDrawer = true, settings = state.settings) {
+    if (state.isLoading || state.isSessionTransition) return false;
+    state.isSessionTransition = true;
     try {
-        let title = `🎭 일반 대화 (${DIFFICULTY_NAMES[state.settings.difficulty] || '초급'})`;
-        if (state.settings.roleplayId) {
-            const rp = mcpPrompts.find(p => p.id === state.settings.roleplayId);
+        let title = `🎭 일반 대화 (${DIFFICULTY_NAMES[settings.difficulty] || '초급'})`;
+        if (settings.roleplayId) {
+            const rp = mcpPrompts.find(p => p.id === settings.roleplayId);
             if (rp) {
-                title = `🎭 ${rp.name} (${DIFFICULTY_NAMES[state.settings.difficulty] || '초급'})`;
+                title = `🎭 ${rp.name} (${DIFFICULTY_NAMES[settings.difficulty] || '초급'})`;
             }
         }
         
@@ -285,30 +305,40 @@ async function startNewSession(closeDrawer = true) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 title: title,
-                partner_name: state.settings.partnerName,
-                difficulty: state.settings.difficulty,
-                topic: state.settings.topic,
-                roleplay_id: state.settings.roleplayId
+                partner_name: settings.partnerName,
+                difficulty: settings.difficulty,
+                topic: settings.topic,
+                roleplay_id: settings.roleplayId
             })
         });
         if (res.ok) {
             const data = await res.json();
             const newSess = data.session;
+            if (!newSess || typeof newSess.session_id !== 'string' || !newSess.session_id) {
+                return false;
+            }
+            sessionStorage.setItem('nihongoActiveSessionId', newSess.session_id);
+            state.settings = settings;
             state.sessions.unshift(newSess);
             state.currentSessionId = newSess.session_id;
-            sessionStorage.setItem('nihongoActiveSessionId', newSess.session_id);
             state.messages = [];
             
             addWelcomeMessage();
             renderSessionList();
             if (closeDrawer) toggleSessionDrawer();
+            return true;
         }
     } catch (e) {
         console.error('Create session failed:', e);
+    } finally {
+        state.isSessionTransition = false;
     }
+    return false;
 }
 
 async function switchSession(sessionId, closeDrawer = true) {
+    if (state.isLoading || state.isSavingSettings || state.isSessionTransition) return;
+    state.isSessionTransition = true;
     try {
         const res = await fetch(`/api/sessions/${sessionId}`);
         if (res.ok) {
@@ -329,14 +359,19 @@ async function switchSession(sessionId, closeDrawer = true) {
         }
     } catch (e) {
         console.error('Switch session failed:', e);
+    } finally {
+        state.isSessionTransition = false;
     }
 }
 
 async function deleteSessionItem(event, sessionId) {
     event.stopPropagation();
+    if (state.isLoading || state.isSavingSettings || state.isSessionTransition) return;
     if (!confirm('이 대화 세션을 삭제하시겠습니까?')) return;
+    state.isSessionTransition = true;
     try {
         const res = await fetch(`/api/sessions/${sessionId}`, { method: 'DELETE' });
+        state.isSessionTransition = false;
         if (res.ok) {
             state.sessions = state.sessions.filter(s => s.session_id !== sessionId);
             if (state.currentSessionId === sessionId) {
@@ -351,6 +386,8 @@ async function deleteSessionItem(event, sessionId) {
         }
     } catch (e) {
         console.error('Delete session failed:', e);
+    } finally {
+        state.isSessionTransition = false;
     }
 }
 
@@ -579,7 +616,12 @@ function addWelcomeMessage() {
     };
     
     state.messages = [message];
-    saveMessages();
+    try {
+        saveMessages();
+    } catch (err) {
+        console.error('Welcome message cache write failed:', err);
+        alert('새 대화는 시작되었지만 이 브라우저에 메시지를 저장하지 못했습니다. 로컬 대화 캐시가 유지되지 않을 수 있습니다.');
+    }
     renderMessages();
 }
 
@@ -824,7 +866,7 @@ function scrollToBottom() {
 // 메시지 전송
 async function sendMessage() {
     const content = messageInput.value.trim();
-    if (!content || state.isLoading) return;
+    if (!content || state.isLoading || state.isSavingSettings || state.isSessionTransition) return;
     
     // 즉시 중복 전송 차단
     state.isLoading = true;
@@ -914,6 +956,7 @@ function handleKeyDown(event) {
 
 // 대화 삭제
 function clearChat() {
+    if (state.isSavingSettings || state.isSessionTransition) return;
     if (confirm('모든 대화 내용을 삭제하시겠습니까?')) {
         state.messages = [];
         addWelcomeMessage();
@@ -922,8 +965,10 @@ function clearChat() {
 
 // 설정 모달
 function toggleSettings() {
+    if (state.isSavingSettings) return;
     if (!settingsModal.classList.contains('show')) {
         applySettingsToUI();
+        document.getElementById('settingsError').textContent = '';
     }
     settingsModal.classList.toggle('show');
 }
