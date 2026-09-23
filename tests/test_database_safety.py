@@ -15,6 +15,8 @@ class DatabaseSafetyTests(unittest.TestCase):
             db_path = Path(temp_dir) / "test.db"
             with patch.object(database, "DB_PATH", str(db_path)):
                 database.init_db()
+                database.create_session("session-1", "Title", "Partner", "N5", "Travel")
+                database.save_message("msg-1", "session-1", "assistant", "Hello")
                 first = database.save_message_feedback("msg-1", "session-1", -1, "bad")
                 second = database.save_message_feedback("msg-1", "session-1", 1, "fixed")
                 with database.get_db_connection() as conn:
@@ -34,8 +36,15 @@ class DatabaseSafetyTests(unittest.TestCase):
         self.assertEqual(journal_mode.lower(), "wal")
 
     def test_feedback_rejects_invalid_rating(self) -> None:
-        with self.assertRaises(ValueError):
-            database.save_message_feedback("msg-1", None, 0)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch.object(database, "DB_PATH", str(Path(temp_dir) / "test.db")):
+                database.init_db()
+                database.create_session("session-1", "Title", "Partner", "N5", "Travel")
+                database.save_message("msg-1", "session-1", "assistant", "Hello")
+                with self.assertRaises(ValueError):
+                    database.save_message_feedback("msg-1", None, 0)
+                with database.get_db_connection() as conn:
+                    self.assertEqual(conn.execute("SELECT COUNT(*) FROM message_feedbacks").fetchone()[0], 0)
 
 
 if __name__ == "__main__":

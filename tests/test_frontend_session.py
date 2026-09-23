@@ -10,6 +10,21 @@ APP_JS = (Path(__file__).resolve().parents[1] / "static" / "app.js").read_text(
 
 
 class FrontendSessionTests(unittest.TestCase):
+    def test_integrity_flow(self):
+        import subprocess
+        result = subprocess.run(
+            ['node', 'tests/frontend_integrity_harness.js'],
+            cwd=Path(__file__).resolve().parents[1],
+            capture_output=True, text=True, timeout=15,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for case in ('feedbackIds', 'deleteRecovery', 'switchSettings', 'settingsQuota', 'sessionQuota', 'quota'):
+            self.assertIn('PASS: ' + case, result.stdout)
+
+    def test_integrity_asset_version(self):
+        template = (Path(__file__).resolve().parents[1] / 'templates' / 'index.html').read_text()
+        self.assertIn('/static/app.js?v=session-integrity-3', template)
+
     def test_roleplay_settings_flow(self):
         import subprocess
         result = subprocess.run(

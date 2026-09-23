@@ -2,7 +2,8 @@ from fastapi import FastAPI, Request, HTTPException, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
+from pydantic import BaseModel, Field
 from llm_provider import generate_text, ProviderOutputError
 from openai import APIError, APIStatusError, APIConnectionError
 from langfuse import observe
@@ -52,6 +53,7 @@ class CreateSessionRequest(BaseModel):
     difficulty: str = "beginner"
     topic: str = "free"
     roleplay_id: str | None = None
+    roleplay_args: dict = Field(default_factory=dict)
 
 
 class ChatRequest(BaseModel):
@@ -289,20 +291,17 @@ def _analyze_feedback_background(api_key: str | None, message_id: str, session_i
     try:
         user_msg = "이전 질문"
         ai_msg = "이전 답장"
-        if session_id:
+        if session_id is not None:
             messages = get_session_messages(session_id)
             matched_index = -1
             for i, m in enumerate(messages):
-                if m["id"] == message_id or message_id in m["id"] or m["id"].endswith(str(message_id)):
+                if m["id"] == message_id and m["role"] == "assistant":
                     matched_index = i
                     break
             
-            # ID 직관 매칭 실패 시 가장 최근 assistant 메시지 매칭
+            # Never analyze an unrelated message after a stale or invalid target.
             if matched_index == -1:
-                for i in range(len(messages) - 1, -1, -1):
-                    if messages[i]["role"] == "assistant":
-                        matched_index = i
-                        break
+                return
 
             if matched_index != -1:
                 ai_msg = messages[matched_index]["content"]
@@ -472,7 +471,8 @@ async def api_create_session(req: CreateSessionRequest):
         partner_name=req.partner_name,
         difficulty=req.difficulty,
         topic=req.topic,
-        roleplay_id=req.roleplay_id
+        roleplay_id=req.roleplay_id,
+        roleplay_args=req.roleplay_args,
     )
     return {"session": session_data}
 
@@ -523,9 +523,12 @@ async def api_list_facts():
 @app.post("/api/feedback")
 async def api_submit_feedback(req: FeedbackRequest, bg_tasks: BackgroundTasks):
     """사용자 👍/👎 피드백 수신 및 백그라운드 Self-Refinement 분석"""
-    fb = save_message_feedback(req.message_id, req.session_id, req.rating, req.feedback_text)
+    try:
+        fb = save_message_feedback(req.message_id, req.session_id, req.rating, req.feedback_text)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
     if req.rating == -1:
-        bg_tasks.add_task(_analyze_feedback_background, req.api_key or os.getenv("OPENAI_API_KEY"), req.message_id, req.session_id, req.rating, req.feedback_text)
+        bg_tasks.add_task(_analyze_feedback_background, req.api_key or os.getenv("OPENAI_API_KEY"), req.message_id, fb.get("session_id", req.session_id), req.rating, req.feedback_text)
     return {"status": "saved", "feedback": fb}
 
 
@@ -541,6 +544,9 @@ async def chat(req: ChatRequest, bg_tasks: BackgroundTasks):
     _assert_no_prompt_injection(req.message)
     _scan_history_for_injection(req.history)
 
+    if req.session_id is not None and not get_session(req.session_id):
+        raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다.")
+
     try:
         start_t = time.time()
         sys_prompt = get_system_prompt(
@@ -553,7 +559,7 @@ async def chat(req: ChatRequest, bg_tasks: BackgroundTasks):
         )
 
         search_keywords = ["검색", "뉴스", "트렌드", "최신", "search", "news", "trend"]
-        raw = generate_text(
+        raw = await run_in_threadpool(generate_text,
             effective_api_key, req.message, instructions=sys_prompt,
             history=req.history,
             web_search=any(k in req.message.lower() for k in search_keywords),
@@ -567,10 +573,13 @@ async def chat(req: ChatRequest, bg_tasks: BackgroundTasks):
         print(f"[Agentic Chat API END] Completed in {elapsed:.2f} seconds.")
         
         assistant_msg_id = None
+        user_msg_id = None
         # 세션 ID가 제공되었다면 유저 메시지 및 AI 답장 DB 저장 (소요 런타임 초 정밀 기록)
         if req.session_id:
-            user_msg_id = f"usr_{int(time.time() * 1000)}"
-            assistant_msg_id = f"ast_{int(time.time() * 1000) + 1}"
+            if not get_session(req.session_id):
+                raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다.")
+            user_msg_id = str(uuid.uuid4())
+            assistant_msg_id = str(uuid.uuid4())
             save_message(user_msg_id, req.session_id, "user", req.message)
             save_message(assistant_msg_id, req.session_id, "assistant", clean_res, response_time_sec=elapsed)
 
@@ -590,8 +599,10 @@ async def chat(req: ChatRequest, bg_tasks: BackgroundTasks):
             bg_tasks.add_task(_update_session_summary_background, effective_api_key, req.session_id)
             bg_tasks.add_task(_extract_grammar_errors_background, effective_api_key, req.message, clean_res)
 
-        return {"response": clean_res}
+        return {"response": clean_res, "message_id": assistant_msg_id, "user_message_id": user_msg_id}
 
+    except HTTPException:
+        raise
     except (APIError, ProviderOutputError) as exc:
         raise _provider_http_error(exc) from None
     except Exception:
@@ -620,7 +631,7 @@ async def multi_chat(req: ChatRequest, bg_tasks: BackgroundTasks):
         # 2-A. Staff Persona (Yuki, Cafe Barista)
         if turn_decision in ["STAFF_ONLY", "STAFF_AND_REGULAR"]:
             sys_staff = "You are Yuki, a polite Japanese cafe barista. Respond in 1-2 brief sentences."
-            staff_text = clean_japanese_text(redact_sensitive_output(generate_text(
+            staff_text = clean_japanese_text(redact_sensitive_output(await run_in_threadpool(generate_text,
                 effective_api_key, f"Customer: {req.message}", instructions=sys_staff,
             )))
             if staff_text:
@@ -634,7 +645,7 @@ async def multi_chat(req: ChatRequest, bg_tasks: BackgroundTasks):
         # 2-B. Regular Customer Persona (Ken, Local Regular)
         if turn_decision in ["REGULAR_ONLY", "STAFF_AND_REGULAR"]:
             sys_regular = "You are Ken, a friendly Japanese regular customer sitting nearby at the cafe. Speak warmly in 1-2 brief sentences."
-            regular_text = clean_japanese_text(redact_sensitive_output(generate_text(
+            regular_text = clean_japanese_text(redact_sensitive_output(await run_in_threadpool(generate_text,
                 effective_api_key, f"Customer: {req.message}", instructions=sys_regular,
             )))
             if regular_text:
@@ -680,7 +691,7 @@ async def translate(req: TranslateRequest, bg_tasks: BackgroundTasks):
 
     try:
         start_t = time.time()
-        raw = generate_text(effective_api_key, req.text, instructions=TRANSLATE_PROMPT)
+        raw = await run_in_threadpool(generate_text, effective_api_key, req.text, instructions=TRANSLATE_PROMPT)
 
         elapsed = time.time() - start_t
         print(f"[Translate API END] Completed in {elapsed:.2f} seconds.")
@@ -708,7 +719,7 @@ async def furigana(req: TranslateRequest, bg_tasks: BackgroundTasks):
         clean_furi = ""
         for attempt in range(2):
             try:
-                raw = generate_text(effective_api_key, req.text, instructions=FURIGANA_PROMPT)
+                raw = await run_in_threadpool(generate_text, effective_api_key, req.text, instructions=FURIGANA_PROMPT)
                 clean_furi = normalize_furigana_output(
                     redact_sensitive_output(raw),
                     req.text,

@@ -140,7 +140,12 @@ function loadSettings() {
     }
     // Credentials are server-managed; discard keys saved by older providers.
     state.settings.apiKey = '';
-    localStorage.setItem('nihongoSettings', JSON.stringify(state.settings));
+    try {
+        localStorage.setItem('nihongoSettings', JSON.stringify(state.settings));
+    } catch (err) {
+        console.error('Settings cache write failed:', err);
+        alert('이 브라우저에 설정을 저장하지 못했습니다. 대화는 계속할 수 있습니다.');
+    }
     applySettingsToUI();
 }
 
@@ -308,7 +313,8 @@ async function startNewSession(closeDrawer = true, settings = state.settings) {
                 partner_name: settings.partnerName,
                 difficulty: settings.difficulty,
                 topic: settings.topic,
-                roleplay_id: settings.roleplayId
+                roleplay_id: settings.roleplayId,
+                roleplay_args: settings.roleplayArgs || {}
             })
         });
         if (res.ok) {
@@ -317,7 +323,12 @@ async function startNewSession(closeDrawer = true, settings = state.settings) {
             if (!newSess || typeof newSess.session_id !== 'string' || !newSess.session_id) {
                 return false;
             }
-            sessionStorage.setItem('nihongoActiveSessionId', newSess.session_id);
+            try {
+                sessionStorage.setItem('nihongoActiveSessionId', newSess.session_id);
+            } catch (err) {
+                console.error('Session cache write failed:', err);
+                alert('대화는 생성되었지만 이 브라우저에 저장하지 못했습니다.');
+            }
             state.settings = settings;
             state.sessions.unshift(newSess);
             state.currentSessionId = newSess.session_id;
@@ -343,9 +354,33 @@ async function switchSession(sessionId, closeDrawer = true) {
         const res = await fetch(`/api/sessions/${sessionId}`);
         if (res.ok) {
             const data = await res.json();
+            const session = data.session;
+            if (!session || session.session_id !== sessionId || !Array.isArray(data.messages) ||
+                typeof session.partner_name !== 'string' || !DIFFICULTY_NAMES[session.difficulty] ||
+                typeof session.topic !== 'string' ||
+                !(session.roleplay_id === null || typeof session.roleplay_id === 'string') ||
+                !session.roleplay_args || typeof session.roleplay_args !== 'object' || Array.isArray(session.roleplay_args)) {
+                throw new Error('Invalid session response');
+            }
             state.currentSessionId = sessionId;
-            sessionStorage.setItem('nihongoActiveSessionId', sessionId);
-            state.messages = data.messages || [];
+            state.settings = {
+                ...state.settings,
+                partnerName: session.partner_name,
+                difficulty: session.difficulty,
+                topic: session.topic,
+                roleplayId: session.roleplay_id,
+                roleplayArgs: session.roleplay_args
+            };
+            state.messages = data.messages;
+            try {
+                sessionStorage.setItem('nihongoActiveSessionId', sessionId);
+                localStorage.setItem('nihongoSettings', JSON.stringify(state.settings));
+            } catch (err) {
+                console.error('Session cache write failed:', err);
+                alert('대화는 열었지만 이 브라우저에 설정을 저장하지 못했습니다.');
+            }
+            applySettingsToUI();
+            saveMessages();
             
             // 세션에 저장된 메시지가 없으면 웰컴 메시지 추가
             if (state.messages.length === 0) {
@@ -375,10 +410,25 @@ async function deleteSessionItem(event, sessionId) {
         if (res.ok) {
             state.sessions = state.sessions.filter(s => s.session_id !== sessionId);
             if (state.currentSessionId === sessionId) {
+                state.currentSessionId = null;
+                state.messages = [];
+                for (const [storage, key] of [[sessionStorage, 'nihongoActiveSessionId'], [localStorage, 'nihongoMessages']]) {
+                    try {
+                        storage.removeItem(key);
+                    } catch (err) {
+                        console.error('Deleted session cache removal failed:', err);
+                    }
+                }
+                renderMessages();
+                renderSessionList();
                 if (state.sessions.length > 0) {
                     await switchSession(state.sessions[0].session_id, false);
                 } else {
                     await startNewSession(false);
+                }
+                if (!state.currentSessionId) {
+                    messagesContainer.innerHTML = '<p>대화를 열지 못했습니다. 새 대화를 시작하거나 다른 세션을 선택해 주세요.</p>';
+                    alert('대화를 열지 못했습니다. 새 대화를 시작하거나 다른 세션을 선택해 주세요.');
                 }
             } else {
                 renderSessionList();
@@ -576,7 +626,12 @@ function loadMessages() {
 
 // 메시지 저장
 function saveMessages() {
-    localStorage.setItem('nihongoMessages', JSON.stringify(state.messages));
+    try {
+        localStorage.setItem('nihongoMessages', JSON.stringify(state.messages));
+    } catch (err) {
+        console.error('Message cache write failed:', err);
+        alert('이 브라우저에 메시지를 저장하지 못했습니다. 대화는 계속할 수 있습니다.');
+    }
 }
 
 // 환영 메시지 추가
@@ -610,6 +665,7 @@ function addWelcomeMessage() {
     
     const message = {
         id: Date.now().toString(),
+        persisted: false,
         role: 'assistant',
         content: content,
         timestamp: new Date().toISOString()
@@ -676,10 +732,10 @@ function createMessageHTML(message) {
                     </div>
                     <div class="message-footer-bar">
                         ${canShowDetails ? '<span class="tap-hint">클릭하여 번역 보기</span>' : ''}
-                        <div class="feedback-bar" id="feedback-bar-${message.id}">
-                            <button class="feedback-btn like-btn ${message.feedback_rating === 1 ? 'active' : ''}" onclick="submitFeedback(event, '${message.id}', 1)" title="도움이 되었어요">👍</button>
-                            <button class="feedback-btn dislike-btn ${message.feedback_rating === -1 ? 'active' : ''}" onclick="submitFeedback(event, '${message.id}', -1)" title="어색하거나 피하고 싶은 답장이에요">👎</button>
-                        </div>
+                        ${message.id && message.persisted !== false ? `<div class="feedback-bar" id="feedback-bar-${message.id}">
+                            <button class="feedback-btn like-btn ${message.feedback_rating === 1 ? 'active' : ''}" ${pendingFeedback.has(message.id) ? 'disabled' : ''} onclick="submitFeedback(event, '${message.id}', 1)" title="도움이 되었어요">👍</button>
+                            <button class="feedback-btn dislike-btn ${message.feedback_rating === -1 ? 'active' : ''}" ${pendingFeedback.has(message.id) ? 'disabled' : ''} onclick="submitFeedback(event, '${message.id}', -1)" title="어색하거나 피하고 싶은 답장이에요">👎</button>
+                        </div>` : ''}
                     </div>
                     <span class="timestamp">${time}</span>
                 </div>
@@ -688,16 +744,16 @@ function createMessageHTML(message) {
     }
 }
 
+const pendingFeedback = new Set();
+
 async function submitFeedback(event, messageId, rating) {
     if (event) event.stopPropagation();
+    const message = state.messages.find(m => m.id === messageId);
+    if (!state.currentSessionId || !messageId || !message || message.role !== 'assistant' || message.persisted === false) return;
+    if (pendingFeedback.has(messageId)) return;
+    pendingFeedback.add(messageId);
     try {
-        const feedbackBtnBar = document.getElementById(`feedback-bar-${messageId}`);
-        if (feedbackBtnBar) {
-            feedbackBtnBar.querySelectorAll('.feedback-btn').forEach(btn => btn.classList.remove('active'));
-            const targetBtn = rating === 1 ? feedbackBtnBar.querySelector('.like-btn') : feedbackBtnBar.querySelector('.dislike-btn');
-            if (targetBtn) targetBtn.classList.add('active');
-        }
-        
+        renderMessages();
         let feedbackText = null;
 
         // DB에 즉시 100% 피드백 저장 전송
@@ -713,11 +769,15 @@ async function submitFeedback(event, messageId, rating) {
             })
         });
         
-        if (res.ok) {
-            console.log(`[Feedback System] Feedback ${rating} successfully recorded in DB for message ${messageId}`);
-        }
+        if (!res.ok) throw new Error('Feedback rejected');
+        message.feedback_rating = rating;
+        saveMessages();
     } catch (e) {
         console.error('Submit feedback failed:', e);
+        alert('피드백을 저장하지 못했습니다. 다시 시도해 주세요.');
+    } finally {
+        pendingFeedback.delete(messageId);
+        renderMessages();
     }
 }
 
@@ -867,34 +927,38 @@ function scrollToBottom() {
 async function sendMessage() {
     const content = messageInput.value.trim();
     if (!content || state.isLoading || state.isSavingSettings || state.isSessionTransition) return;
+    if (!state.currentSessionId) {
+        alert('새 대화를 시작하거나 저장된 세션을 선택해 주세요.');
+        return;
+    }
     
     // 즉시 중복 전송 차단
     state.isLoading = true;
     sendBtn.disabled = true;
     
 
-    // 사용자 메시지 추가
-    const userMessage = {
-        id: Date.now().toString(),
-        role: 'user',
-        content: content,
-        timestamp: new Date().toISOString()
-    };
-    
-    state.messages.push(userMessage);
-    saveMessages();
-    renderMessages();
-    
-    messageInput.value = '';
-    messageInput.style.height = 'auto';
-    setTimeout(() => {
+    try {
+        // 사용자 메시지 추가
+        const userMessage = {
+            id: Date.now().toString(),
+            role: 'user',
+            content: content,
+            timestamp: new Date().toISOString()
+        };
+
+        state.messages.push(userMessage);
+        saveMessages();
+        renderMessages();
+
         messageInput.value = '';
         messageInput.style.height = 'auto';
-    }, 0);
+        setTimeout(() => {
+            messageInput.value = '';
+            messageInput.style.height = 'auto';
+        }, 0);
+
+        showTypingIndicator();
     
-    showTypingIndicator();
-    
-    try {
         // 대화 히스토리 구성
         const history = state.messages.slice(-10).map(msg => ({
             role: msg.role,
@@ -923,10 +987,11 @@ async function sendMessage() {
         }
         
         const data = await response.json();
+        userMessage.id = data.user_message_id;
         
         // AI 메시지 생성 후 화면에 100% 즉시 출력
         const assistantMessage = {
-            id: `ast_${Date.now() + 1}`,
+            id: data.message_id,
             role: 'assistant',
             content: data.response,
             timestamp: new Date().toISOString()

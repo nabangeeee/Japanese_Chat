@@ -3,6 +3,7 @@ SQLite Database layer for NihongoChat.
 Manages persistent conversation sessions, chat messages, and long-term learner memories (error notes).
 """
 import sqlite3
+import json
 import os
 from typing import List, Dict, Any, Optional
 from datetime import datetime
@@ -48,6 +49,10 @@ def init_db():
             )
         """)
         
+        cursor.execute("PRAGMA table_info(sessions)")
+        if "roleplay_args" not in [row["name"] for row in cursor.fetchall()]:
+            cursor.execute("ALTER TABLE sessions ADD COLUMN roleplay_args TEXT NOT NULL DEFAULT '{}'")
+
         # Messages table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS messages (
@@ -127,16 +132,17 @@ def init_db():
 
 # --- Session Operations ---
 
-def create_session(session_id: str, title: str, partner_name: str, difficulty: str, topic: str, roleplay_id: Optional[str] = None) -> Dict[str, Any]:
+def create_session(session_id: str, title: str, partner_name: str, difficulty: str, topic: str, roleplay_id: Optional[str] = None, roleplay_args: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    roleplay_args = roleplay_args if isinstance(roleplay_args, dict) else {}
     now = datetime.now().isoformat()
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
             """
-            INSERT INTO sessions (session_id, title, partner_name, difficulty, topic, roleplay_id, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO sessions (session_id, title, partner_name, difficulty, topic, roleplay_id, created_at, updated_at, roleplay_args)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (session_id, title, partner_name, difficulty, topic, roleplay_id, now, now)
+            (session_id, title, partner_name, difficulty, topic, roleplay_id, now, now, json.dumps(roleplay_args, ensure_ascii=False))
         )
         conn.commit()
     return {
@@ -146,9 +152,20 @@ def create_session(session_id: str, title: str, partner_name: str, difficulty: s
         "difficulty": difficulty,
         "topic": topic,
         "roleplay_id": roleplay_id,
+        "roleplay_args": roleplay_args,
         "created_at": now,
         "updated_at": now
     }
+
+
+def _decode_session(row: sqlite3.Row) -> Dict[str, Any]:
+    session = dict(row)
+    try:
+        args = json.loads(session.get("roleplay_args") or "{}")
+    except (TypeError, ValueError):
+        args = {}
+    session["roleplay_args"] = args if isinstance(args, dict) else {}
+    return session
 
 
 def get_all_sessions() -> List[Dict[str, Any]]:
@@ -156,7 +173,7 @@ def get_all_sessions() -> List[Dict[str, Any]]:
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM sessions ORDER BY updated_at DESC")
         rows = cursor.fetchall()
-        return [dict(row) for row in rows]
+        return [_decode_session(row) for row in rows]
 
 
 def get_session(session_id: str) -> Optional[Dict[str, Any]]:
@@ -164,12 +181,19 @@ def get_session(session_id: str) -> Optional[Dict[str, Any]]:
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM sessions WHERE session_id = ?", (session_id,))
         row = cursor.fetchone()
-        return dict(row) if row else None
+        return _decode_session(row) if row else None
 
 
 def delete_session(session_id: str) -> bool:
     with get_db_connection() as conn:
         cursor = conn.cursor()
+        cursor.execute(
+            """DELETE FROM message_feedbacks
+               WHERE session_id = ? OR message_id IN (
+                   SELECT id FROM messages WHERE session_id = ?
+               )""",
+            (session_id, session_id),
+        )
         cursor.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
         cursor.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
         conn.commit()
@@ -192,7 +216,7 @@ def save_message(msg_id: str, session_id: str, role: str, content: str, translat
         cursor = conn.cursor()
         cursor.execute(
             """
-            INSERT OR REPLACE INTO messages (id, session_id, role, content, translation, furigana, response_time_sec, timestamp)
+            INSERT INTO messages (id, session_id, role, content, translation, furigana, response_time_sec, timestamp)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (msg_id, session_id, role, content, translation, furigana, response_time_sec, ts)
@@ -311,6 +335,17 @@ def save_message_feedback(message_id: str, session_id: Optional[str], rating: in
     now = datetime.now().isoformat()
     with get_db_connection() as conn:
         cursor = conn.cursor()
+        # Serialize validation and the upsert with session deletion.
+        cursor.execute("BEGIN IMMEDIATE")
+        message = cursor.execute(
+            "SELECT m.session_id, m.role FROM messages m JOIN sessions s ON s.session_id = m.session_id WHERE m.id = ?",
+            (message_id,),
+        ).fetchone()
+        if message is None or message["role"] != "assistant":
+            raise ValueError("feedback target must be an existing assistant message")
+        if session_id is not None and session_id != message["session_id"]:
+            raise ValueError("session_id does not match the feedback message")
+        session_id = message["session_id"]
         cursor.execute(
             """
             INSERT INTO message_feedbacks (message_id, session_id, rating, feedback_text, created_at)
@@ -323,10 +358,10 @@ def save_message_feedback(message_id: str, session_id: Optional[str], rating: in
             """,
             (message_id, session_id, rating, feedback_text, now)
         )
-        conn.commit()
         fb_id = cursor.execute(
             "SELECT id FROM message_feedbacks WHERE message_id = ?", (message_id,)
         ).fetchone()["id"]
+        conn.commit()
     return {
         "id": fb_id,
         "message_id": message_id,

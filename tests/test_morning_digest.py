@@ -28,12 +28,16 @@ class MorningDigestTests(unittest.TestCase):
             result = generate_digest(project_root=root)
             self.assertIn('10단어', result)
             self.assertEqual(generate.call_count, 2)
+            prompt = generate.call_args.args[1]
+            self.assertIn('Only select dictionary-form words that occur literally', prompt)
+            self.assertIn('source_form must equal word exactly', prompt)
+            self.assertIn('Do not lemmatize inflected forms', prompt)
             schema = generate.call_args.kwargs['json_schema']
             self.assertFalse(schema['additionalProperties'])
             self.assertFalse(schema['$defs']['VocabularyItem']['additionalProperties'])
             saved = list((root/'scratch'/'digests').glob('????-??-??.json'))
             self.assertEqual(len(saved), 1)
-            self.assertEqual(len(json.loads(saved[0].read_text())['items']), 10)
+            self.assertEqual(json.loads(saved[0].read_text())['items'], items)
             self.assertEqual(generate_digest(project_root=root), result)
             self.assertEqual(generate.call_count, 2)
 
@@ -110,6 +114,7 @@ class MorningDigestTests(unittest.TestCase):
     def test_rejects_word_absent_from_saved_conversation(self) -> None:
         items = [
             {
+                "source_form": f"言葉{i}",
                 "word": f"言葉{i}",
                 "reading": "ことば",
                 "meaning_ko": "말",

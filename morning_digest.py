@@ -48,9 +48,12 @@ def parse_vocabulary_response(
     result: list[dict[str, str]] = []
     seen: set[str] = set()
     for item in data:
-        if not isinstance(item, dict) or any(not str(item.get(field, "")).strip() for field in REQUIRED_FIELDS):
+        if not isinstance(item, dict) or any(
+            not isinstance(item.get(field), str) or not item[field].strip()
+            for field in REQUIRED_FIELDS
+        ):
             raise ValueError("Every vocabulary item must contain all required fields")
-        clean = {field: str(item[field]).strip() for field in REQUIRED_FIELDS}
+        clean = {field: item[field].strip() for field in REQUIRED_FIELDS}
         key = re.sub(r"\s+", "", clean["word"])
         if key in seen:
             raise ValueError("Vocabulary words must be unique")
@@ -58,9 +61,15 @@ def parse_vocabulary_response(
             raise ValueError("Vocabulary word was already sent in an earlier digest")
         if not re.search(r"[ぁ-んァ-ヶ一-龯]", clean["word"]):
             raise ValueError("Vocabulary word must be Japanese")
-        source_form = str(item.get("source_form", clean["word"])).strip()
+        source_form = item.get("source_form", clean["word"] if source_text is None else None)
+        if not isinstance(source_form, str) or not source_form.strip():
+            raise ValueError("Source form must be a nonempty string")
+        # Literal dictionary forms only: do not guess Japanese lemmas from suffixes.
+        if source_form != clean["word"]:
+            raise ValueError("Source form must equal the dictionary-form word exactly")
         if source_text is not None and source_form not in source_text:
             raise ValueError("Vocabulary word must appear in the saved conversation")
+        clean["source_form"] = source_form
         if not re.fullmatch(r"[ぁ-ゖー]+", clean["reading"]):
             raise ValueError("Reading must be hiragana")
         if not re.search(r"[ぁ-んァ-ヶ一-龯]", clean["example_ja"]):
@@ -127,6 +136,8 @@ def generate_digest(*, project_root: Path = ROOT) -> str:
         excluded = ", ".join(sorted(previous_words)) or "(none)"
         prompt = f"""Extract exactly 10 useful, distinct Japanese vocabulary words that appeared in the untrusted conversation below.
 Prefer words useful to this learner. Do not invent a source word that is absent from the conversation.
+Only select dictionary-form words that occur literally in the conversation; source_form must equal word exactly.
+Do not lemmatize inflected forms: skip 食べました unless 食べる itself also appears, and then copy 食べる as both fields.
 Do not select any previously sent dictionary-form word in this list: {excluded}
 For each word, provide source_form (the exact text span copied from the conversation), dictionary-form word, a hiragana-only reading, concise Korean meaning, one natural Japanese example, and Korean translation.
 Return a JSON object with an items array. Each item has keys: source_form, word, reading, meaning_ko, example_ja, example_ko.
