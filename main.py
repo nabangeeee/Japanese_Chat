@@ -18,9 +18,11 @@ from rag_access import rag_access_configured
 from mcp_prompts import list_mcp_prompts, get_mcp_prompt_instruction
 from database import (
     init_db, create_session, get_all_sessions, get_session, delete_session,
-    save_message, get_session_messages, save_user_memory, get_user_memories,
+    get_session_messages, save_user_memory, get_user_memories,
     save_session_summary, get_session_summary, save_user_fact, get_all_user_facts,
-    save_message_feedback, update_message_quality_score
+    save_message_feedback, update_message_quality_score,
+    get_message, save_message_detail, get_saved_turn, save_chat_turn,
+    get_practice_memories, record_memory_review
 )
 from autonomous_repair import enqueue_runtime_incident
 from continuous_improvement import record_quality_incident
@@ -58,6 +60,7 @@ class CreateSessionRequest(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str
+    request_id: uuid.UUID | None = None
     history: list = []
     api_key: str
     partner_name: str = "유키"
@@ -79,6 +82,11 @@ class FeedbackRequest(BaseModel):
 class TranslateRequest(BaseModel):
     text: str
     api_key: str
+    message_id: str | None = None
+
+
+class MemoryReviewRequest(BaseModel):
+    remembered: bool
 
 
 class MCPGetPromptRequest(BaseModel):
@@ -219,7 +227,7 @@ def _update_session_summary_background(api_key: str, session_id: str):
     """백그라운드 세션 대화 요약 및 유저 팩트 동적 추출 (OpenAI gpt-6-astra 최우선)"""
     try:
         messages = get_session_messages(session_id)
-        if len(messages) < 6:
+        if len(messages) < 6 or len(messages) % 6 != 0:
             return
 
         dialogue_text = "\n".join([f"{m['role']}: {m['content']}" for m in messages[-14:]])
@@ -502,6 +510,18 @@ async def api_list_memories():
     return {"memories": get_user_memories(limit=30)}
 
 
+@app.get("/api/memories/practice")
+async def api_practice_memories():
+    return {"memories": get_practice_memories()}
+
+
+@app.post("/api/memories/{memory_id}/review")
+async def api_review_memory(memory_id: int, req: MemoryReviewRequest):
+    if not record_memory_review(memory_id, req.remembered):
+        raise HTTPException(status_code=404, detail="오답을 찾을 수 없습니다.")
+    return {"status": "saved"}
+
+
 @app.get("/api/facts")
 async def api_list_facts():
     """학습자 장기 기억 프로필 (유저 팩트 및 세션 요약) 목록 반환"""
@@ -547,6 +567,16 @@ async def chat(req: ChatRequest, bg_tasks: BackgroundTasks):
     if req.session_id is not None and not get_session(req.session_id):
         raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다.")
 
+    user_msg_id = str(req.request_id or uuid.uuid4()) if req.session_id else None
+    assistant_msg_id = str(uuid.uuid5(uuid.NAMESPACE_URL, "nihongo:" + user_msg_id)) if user_msg_id else None
+    if user_msg_id:
+        try:
+            saved = get_saved_turn(user_msg_id, assistant_msg_id, req.session_id, req.message)
+        except ValueError:
+            raise HTTPException(status_code=409, detail="이미 사용한 전송 번호입니다.") from None
+        if saved:
+            return {"response": saved["content"], "message_id": assistant_msg_id, "user_message_id": user_msg_id}
+
     try:
         start_t = time.time()
         sys_prompt = get_system_prompt(
@@ -572,16 +602,18 @@ async def chat(req: ChatRequest, bg_tasks: BackgroundTasks):
         elapsed = round(time.time() - start_t, 2)
         print(f"[Agentic Chat API END] Completed in {elapsed:.2f} seconds.")
         
-        assistant_msg_id = None
-        user_msg_id = None
         # 세션 ID가 제공되었다면 유저 메시지 및 AI 답장 DB 저장 (소요 런타임 초 정밀 기록)
         if req.session_id:
             if not get_session(req.session_id):
                 raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다.")
-            user_msg_id = str(uuid.uuid4())
-            assistant_msg_id = str(uuid.uuid4())
-            save_message(user_msg_id, req.session_id, "user", req.message)
-            save_message(assistant_msg_id, req.session_id, "assistant", clean_res, response_time_sec=elapsed)
+            try:
+                clean_res, created = save_chat_turn(
+                    user_msg_id, assistant_msg_id, req.session_id, req.message, clean_res, elapsed,
+                )
+            except ValueError:
+                raise HTTPException(status_code=409, detail="이미 사용한 전송 번호입니다.") from None
+            if not created:
+                return {"response": clean_res, "message_id": assistant_msg_id, "user_message_id": user_msg_id}
 
         if generation_succeeded:
             bg_tasks.add_task(
@@ -595,7 +627,7 @@ async def chat(req: ChatRequest, bg_tasks: BackgroundTasks):
             )
 
         if req.session_id:
-            # 백그라운드 세션 대화 요약 및 오답 파싱 태스크 등록 (0.5초 응답 속도 보장)
+            # 세 턴마다 요약을 갱신하고, 이번 문장의 오답을 기록한다.
             bg_tasks.add_task(_update_session_summary_background, effective_api_key, req.session_id)
             bg_tasks.add_task(_extract_grammar_errors_background, effective_api_key, req.message, clean_res)
 
@@ -680,9 +712,28 @@ async def multi_chat(req: ChatRequest, bg_tasks: BackgroundTasks):
         raise HTTPException(status_code=500, detail="서버 내부 오류가 발생했습니다.")
 
 
+def _saved_detail(req: TranslateRequest, field: str) -> str | None:
+    if req.message_id is None:
+        return None
+    message = get_message(req.message_id)
+    if not message or message["role"] != "assistant":
+        raise HTTPException(status_code=404, detail="답장을 찾을 수 없습니다.")
+    if message["content"] != req.text:
+        raise HTTPException(status_code=409, detail="저장된 답장과 내용이 다릅니다.")
+    return message[field]
+
+
+def _persist_detail(req: TranslateRequest, field: str, value: str) -> None:
+    if req.message_id and not save_message_detail(req.message_id, field, value):
+        raise HTTPException(status_code=404, detail="답장이 삭제되었습니다.")
+
+
 @app.post("/api/translate")
 @observe(name="nihongo_translate", as_type="generation")
 async def translate(req: TranslateRequest, bg_tasks: BackgroundTasks):
+    cached = _saved_detail(req, "translation")
+    if cached:
+        return {"translation": cached}
     effective_api_key = req.api_key or os.getenv("OPENAI_API_KEY")
     if not effective_api_key:
         raise HTTPException(status_code=400, detail="OPENAI_API_KEY가 필요합니다.")
@@ -695,9 +746,14 @@ async def translate(req: TranslateRequest, bg_tasks: BackgroundTasks):
 
         elapsed = time.time() - start_t
         print(f"[Translate API END] Completed in {elapsed:.2f} seconds.")
-        clean_tr = clean_translation_text(redact_sensitive_output(raw or "번역 결과를 불러올 수 없습니다."))
+        clean_tr = clean_translation_text(redact_sensitive_output(raw or ""))
+        if not clean_tr.strip():
+            raise ProviderOutputError("Translation was empty after cleanup")
+        _persist_detail(req, "translation", clean_tr)
         return {"translation": clean_tr}
 
+    except HTTPException:
+        raise
     except (APIError, ProviderOutputError) as exc:
         raise _provider_http_error(exc) from None
     except Exception:
@@ -708,6 +764,9 @@ async def translate(req: TranslateRequest, bg_tasks: BackgroundTasks):
 @app.post("/api/furigana")
 @observe(name="nihongo_furigana", as_type="generation")
 async def furigana(req: TranslateRequest, bg_tasks: BackgroundTasks):
+    cached = _saved_detail(req, "furigana")
+    if cached and normalize_furigana_output(cached, req.text):
+        return {"furigana": cached}
     effective_api_key = req.api_key or os.getenv("OPENAI_API_KEY")
     if not effective_api_key:
         raise HTTPException(status_code=400, detail="OPENAI_API_KEY가 필요합니다.")
@@ -737,6 +796,7 @@ async def furigana(req: TranslateRequest, bg_tasks: BackgroundTasks):
                 status_code=502,
                 detail="히라가나 읽는 법 생성에 실패했습니다. 다시 시도해 주세요.",
             )
+        _persist_detail(req, "furigana", clean_furi)
         return {"furigana": clean_furi}
 
     except HTTPException:

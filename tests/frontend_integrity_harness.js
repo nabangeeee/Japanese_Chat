@@ -9,7 +9,7 @@ function setup() {
         return { value: '', style: {}, innerHTML: '', textContent: '',
             classList: { add: x => classes.add(x), remove: x => classes.delete(x),
                 contains: x => classes.has(x), toggle: (x, yes) => yes ? classes.add(x) : classes.delete(x) },
-            remove() {}, appendChild() {} };
+            remove() {}, appendChild() {}, focus() {}, scrollIntoView() {} };
     };
     const get = id => { if (!elements.has(id)) elements.set(id, element()); return elements.get(id); };
     const local = new Map();
@@ -22,6 +22,7 @@ function setup() {
         map.set(key, value);
     }, removeItem: key => map.delete(key), getItem: key => map.get(key) });
     const context = vm.createContext({
+        crypto: require('node:crypto').webcrypto,
         console: { log() {}, error() {} }, alert: x => warnings.push(x), confirm: () => true,
         setTimeout() {}, document: { getElementById: get, createElement: element, addEventListener() {},
             querySelectorAll: () => [], querySelector: () => null },
@@ -39,6 +40,91 @@ function setup() {
 }
 
 const tests = {
+    async scenarioAndStarter() {
+        const h = setup();
+        h.run("useStarter('今日はいい天気ですね。')");
+        assert.equal(h.get('messageInput').value, '今日はいい天気ですね。');
+        assert.equal(h.requests.length, 0, 'A suggestion fills the composer without sending');
+        h.run("mcpPrompts = [{id:'cafe_order', name:'☕️ 카페 주문하기 (Café)', arguments:[{name:'place',default:'Tokyo'}], welcome_message:'いらっしゃいませ'}]");
+        h.env.reply = async () => ({ok: false});
+        await h.run("startScenario('cafe_order')");
+        assert.equal(h.run('state.currentSessionId'), 'old-session');
+        assert.match(h.get('sceneError').textContent, /시작하지 못/);
+        h.env.reply = async () => ({ok: true, json: async () => ({session:{session_id:'cafe-session'}})});
+        await h.run("startScenario('cafe_order')");
+        assert.equal(h.run('state.currentSessionId'), 'cafe-session');
+        assert.equal(h.run('state.settings.roleplayId'), 'cafe_order');
+        assert.equal(h.run('state.settings.roleplayArgs.place'), 'Tokyo');
+        assert.equal(h.run('state.messages[0].content'), 'いらっしゃいませ');
+        assert.equal(h.get('starterPrompts').hidden, true);
+        assert.match(h.get('roleplayStatus').textContent, /카페 주문하기/);
+        assert.equal(h.get('sceneError').textContent, '');
+    },
+    async retryRecovery() {
+        const h = setup();
+        h.get('messageInput').value = 'failed text';
+        h.env.reply = async () => ({ok: false, json: async () => ({detail: 'temporary failure'})});
+        await h.run('sendMessage()');
+        const failedId = h.run('state.messages[0].id');
+        assert.equal(h.run('state.messages[0].delivery'), 'failed');
+        assert.match(h.get('messages').innerHTML, /다시 보내기/);
+        const requestId = h.requests[0].body.request_id;
+        assert.equal(h.requests[0].body.history.length, 0);
+        h.env.reply = async () => ({ok: true, json: async () => ({response: 'reply', message_id: 'assistant-db', user_message_id: requestId})});
+        h.get('messageInput').value = 'next text';
+        await h.run('sendMessage()');
+        assert.equal(h.requests[1].body.history.length, 0, 'Failed messages are excluded from history');
+        h.get('messageInput').value = 'unfinished draft';
+        await h.run(`sendMessage('${failedId}')`);
+        assert.equal(h.requests[2].body.request_id, requestId, 'Retry uses the original request ID');
+        assert.equal(h.run("state.messages.filter(m => m.content === 'failed text').length"), 1);
+        assert.equal(h.get('messageInput').value, 'unfinished draft');
+        assert.equal(h.run("state.messages.some(m => m.delivery === 'failed')"), false);
+    },
+    async detailRecovery() {
+        const h = setup();
+        h.run("state.messages = [{id: 'saved', role: 'assistant', content: 'こんにちは'}]");
+        let fail = true;
+        let release;
+        h.env.reply = async request => {
+            assert.equal(request.body.message_id, 'saved');
+            if (request.url === '/api/translate') return {ok: true, json: async () => ({translation: '안녕하세요'})};
+            await new Promise(resolve => {release = resolve;});
+            return {ok: !fail, json: async () => ({furigana: 'こんにちは'})};
+        };
+        const first = h.run("toggleDetails('saved')");
+        await new Promise(resolve => setImmediate(resolve));
+        await h.run("toggleDetails('saved')");
+        await h.run("toggleDetails('saved')");
+        assert.equal(h.requests.length, 2, 'Repeated taps do not duplicate requests');
+        assert.match(h.get('details-saved').innerHTML, /안녕하세요/, 'Translation appears before reading finishes');
+        release(); await first;
+        assert.match(h.get('details-saved').innerHTML, /다시 시도/);
+        fail = false;
+        const retry = h.run("retryDetails('saved')");
+        await new Promise(resolve => setImmediate(resolve));
+        release(); await retry;
+        assert.equal(h.requests.length, 3, 'Only the failed field is retried');
+        assert.doesNotMatch(h.get('details-saved').innerHTML, /다시 시도/);
+    },
+    async practiceRecovery() {
+        const h = setup();
+        h.env.reply = async () => ({ok: true, json: async () => ({memories: [{id: 1, original_text: 'original', corrected_text: 'corrected', explanation: 'reason'}]})});
+        h.run("currentMemoryTab = 'practice'");
+        await h.run('loadPractice()');
+        assert.doesNotMatch(h.get('memoryListBody').innerHTML, /corrected/);
+        h.get('practiceAnswer').value = 'my answer';
+        h.run('revealPractice()');
+        assert.match(h.get('memoryListBody').innerHTML, /corrected/);
+        h.env.reply = async () => ({ok: false});
+        await h.run('savePracticeReview(false)');
+        assert.equal(h.run('practice.index'), 0);
+        assert.match(h.get('practiceError').textContent, /저장하지 못/);
+        h.env.reply = async () => ({ok: true});
+        await h.run('savePracticeReview(true)');
+        assert.equal(h.run('practice.index'), 1);
+        assert.match(h.get('memoryListBody').innerHTML, /마쳤어요/);
+    },
     async feedbackIds() {
         const h = setup();
         h.get('messageInput').value = 'hello';

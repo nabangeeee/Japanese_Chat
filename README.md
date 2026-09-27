@@ -25,6 +25,13 @@ OpenAI `gpt-6-astra` handles chat, learning utilities, quality review, and the d
 - Translation and readings (Furigana) are fetched asynchronously in parallel via `Promise.all`, cutting user-perceived latency from **11s down to 5s (54% Reduction)**.
 - These are historical pipeline measurements, not a latency guarantee for the newly selected GPT-6 Astra model.
 
+### Conversation recovery and daily practice
+- The responsive interface places the conversation beside everyday roleplay shortcuts and the learning notebook. Starter prompts fill the composer for review before sending.
+- Failed sends show a retry button and stay out of subsequent conversation context. Retries reuse a request ID; an already saved answer is returned without another model call. The user message and answer are saved in one transaction.
+- Translation and reading results are stored with the assistant message and reused when reopening a session. Each result appears as soon as it is ready, with retry controls for failed requests.
+- **학습 노트 → 오늘의 복습** shows up to three due expressions per visit. Write a correction, reveal the example, and self-assess: difficult expressions return after one day; remembered expressions return after seven days. This practice flow makes no model calls.
+- Session summaries update every three completed conversation turns. Existing conversations and notes are preserved by additive database migrations on server startup.
+
 ### 2. ☁️ Asynchronous Learning Utilities
 - OpenAI executes session summarization, grammar error extraction, and negative-feedback analysis through FastAPI `BackgroundTasks`.
 - No on-device model server or model weights are required.
@@ -124,7 +131,7 @@ Japanese/
 │   └── index.html              # Main web UI template
 ├── static/
 │   ├── app.js                  # Async UI controller & event handlers
-│   └── style.css               # Dark mode & glassmorphism stylesheet
+│   └── style.css               # Responsive ivory, ink, and sakura UI stylesheet
 └── scratch/
     ├── self_healing/           # Ignored runtime incident prompts and logs
     └── improvement/            # Ignored approval-gated proposal state

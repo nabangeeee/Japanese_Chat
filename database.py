@@ -6,7 +6,7 @@ import sqlite3
 import json
 import os
 from typing import List, Dict, Any, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nihongo_chat.db")
 
@@ -87,6 +87,13 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+
+        cursor.execute("PRAGMA table_info(user_memories)")
+        memory_columns = {row["name"] for row in cursor.fetchall()}
+        if "next_review_at" not in memory_columns:
+            cursor.execute("ALTER TABLE user_memories ADD COLUMN next_review_at TEXT")
+        if "review_count" not in memory_columns:
+            cursor.execute("ALTER TABLE user_memories ADD COLUMN review_count INTEGER NOT NULL DEFAULT 0")
 
         # Session Summaries table (Long-term Memory)
         cursor.execute("""
@@ -243,7 +250,7 @@ def update_message_quality_score(msg_id: str, score: float):
 def get_session_messages(session_id: str) -> List[Dict[str, Any]]:
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM messages WHERE session_id = ? ORDER BY timestamp ASC", (session_id,))
+        cursor.execute("SELECT * FROM messages WHERE session_id = ? ORDER BY timestamp ASC, rowid ASC", (session_id,))
         rows = cursor.fetchall()
         return [dict(row) for row in rows]
 
@@ -378,3 +385,69 @@ def get_negative_feedbacks(limit: int = 10) -> List[Dict[str, Any]]:
         cursor.execute("SELECT * FROM message_feedbacks WHERE rating = -1 ORDER BY created_at DESC LIMIT ?", (limit,))
         rows = cursor.fetchall()
         return [dict(row) for row in rows]
+
+
+def get_message(message_id: str) -> Optional[Dict[str, Any]]:
+    with get_db_connection() as conn:
+        row = conn.execute("SELECT * FROM messages WHERE id = ?", (message_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def save_message_detail(message_id: str, field: str, value: str) -> bool:
+    if field not in ("translation", "furigana"):
+        raise ValueError("Unsupported message detail")
+    with get_db_connection() as conn:
+        return conn.execute(
+            f"UPDATE messages SET {field} = ? WHERE id = ? AND role = 'assistant'",
+            (value, message_id),
+        ).rowcount == 1
+
+
+def get_saved_turn(user_id: str, assistant_id: str, session_id: str, content: str):
+    with get_db_connection() as conn:
+        user = conn.execute("SELECT * FROM messages WHERE id = ?", (user_id,)).fetchone()
+        if user is None:
+            return None
+        if user["session_id"] != session_id or user["role"] != "user" or user["content"] != content:
+            raise ValueError("Request ID already used for another message")
+        assistant = conn.execute("SELECT * FROM messages WHERE id = ?", (assistant_id,)).fetchone()
+        if assistant is None or assistant["session_id"] != session_id or assistant["role"] != "assistant":
+            raise ValueError("Incomplete saved turn")
+        return dict(assistant)
+
+
+def save_chat_turn(user_id: str, assistant_id: str, session_id: str,
+                   user_text: str, assistant_text: str, elapsed: float):
+    """Save both sides atomically; concurrent retries reuse the committed turn."""
+    now = datetime.now().isoformat()
+    with get_db_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        existing = get_saved_turn(user_id, assistant_id, session_id, user_text)
+        if existing:
+            return existing["content"], False
+        conn.executemany(
+            "INSERT INTO messages (id, session_id, role, content, response_time_sec, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
+            [(user_id, session_id, "user", user_text, None, now),
+             (assistant_id, session_id, "assistant", assistant_text, elapsed, now)],
+        )
+        conn.execute("UPDATE sessions SET updated_at = ? WHERE session_id = ?", (now, session_id))
+    return assistant_text, True
+
+
+def get_practice_memories(limit: int = 3) -> List[Dict[str, Any]]:
+    with get_db_connection() as conn:
+        return [dict(row) for row in conn.execute(
+            "SELECT * FROM user_memories WHERE corrected_text IS NOT NULL AND corrected_text != '' "
+            "AND (next_review_at IS NULL OR next_review_at <= ?) "
+            "ORDER BY next_review_at ASC, created_at DESC, id DESC LIMIT ?",
+            (datetime.now().isoformat(), limit),
+        )]
+
+
+def record_memory_review(memory_id: int, remembered: bool) -> bool:
+    next_review = (datetime.now() + timedelta(days=7 if remembered else 1)).isoformat()
+    with get_db_connection() as conn:
+        return conn.execute(
+            "UPDATE user_memories SET next_review_at = ?, review_count = review_count + 1 WHERE id = ?",
+            (next_review, memory_id),
+        ).rowcount == 1

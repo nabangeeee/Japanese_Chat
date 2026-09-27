@@ -3,113 +3,106 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🇯🇵 니혼고챗</title>
-    <link rel="stylesheet" href="/static/style.css">
+    <meta name="theme-color" content="#FAF7F2">
+    <title>니혼고챗 · 일본어가 일상이 되는 곳</title>
+    <link rel="stylesheet" href="/static/style.css?v=sakura-ink-6">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;600&family=Noto+Sans+KR:wght@400;500;600;700&display=swap" rel="stylesheet">
 </head>
 <body>
-    <div class="app">
-        <!-- 헤더 -->
-        <header class="header">
-            <button class="header-btn" onclick="toggleSessionDrawer()" title="이전 대화 세션">
-                <span style="font-size: 1.2rem;">📜</span>
-            </button>
-            <h1 class="header-title">니혼고챗</h1>
-            <div style="display: flex; gap: 8px;">
-                <button class="header-btn" onclick="toggleMemoryModal()" title="내 오답 노트">
-                    <span style="font-size: 1.2rem;">🐱</span>
-                </button>
-                <button class="header-btn" onclick="toggleSettings()" title="설정">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <circle cx="12" cy="12" r="3"/>
-                        <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z"/>
-                    </svg>
-                </button>
+<div class="app">
+    <header class="header">
+        <div class="brand"><span class="brand-mark" lang="ja">に</span><div class="brand-name">니혼고챗<span>NIHONGO, EVERY DAY</span></div></div>
+        <nav class="header-nav" aria-label="주요 메뉴">
+            <button class="header-btn" onclick="toggleSessionDrawer()" title="대화 기록"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11a9 9 0 1 1 2.6 7M3 4v7h7"/><path d="M12 7v5l3 2"/></svg><span>대화 기록</span></button>
+            <button class="header-btn" onclick="openLearning('errors')" title="학습 노트"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5c-3-2-6-2-9-1v15c3-1 6-1 9 1 3-2 6-2 9-1V4c-3-1-6-1-9 1Zm0 0v15"/></svg><span>학습 노트</span></button>
+            <button class="header-btn" onclick="toggleSettings()" title="설정"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3"/><circle cx="15" cy="17" r="3"/></svg><span>설정</span></button>
+        </nav>
+    </header>
+    <div class="workspace">
+        <main class="conversation-panel" id="conversationPanel">
+            <section class="intro" aria-labelledby="introTitle">
+                <p class="intro-label"><span class="quiet-dot"></span>나만의 작은 일본어 시간</p>
+                <h1 id="introTitle">조금씩, 편안하게.<br><span>일본어가 일상이 되도록.</span></h1>
+                <p class="intro-copy">틀려도 괜찮아요. 오늘의 이야기를 한 문장씩 나눠 봐요.</p>
+            </section>
+            <div class="conversation-toolbar">
+                <div class="status-bar" id="statusBar"><span id="partnerStatus">유키와 함께</span><span class="status-item" id="difficultyStatus">초급</span><span class="status-item" id="roleplayStatus">자유 대화</span></div>
+                <button class="new-chat-action" onclick="newConversation()" title="새 대화 시작"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span>새 대화</span></button>
             </div>
-        </header>
-
-        <!-- 이전 대화 사이드 드로어 -->
-        <div class="drawer-backdrop" id="drawerBackdrop" onclick="toggleSessionDrawer()"></div>
-        <div class="drawer" id="sessionDrawer">
-            <div class="drawer-header">
-                <h3>📜 대화 히스토리</h3>
-                <button class="close-btn" onclick="toggleSessionDrawer()">✕</button>
-            </div>
-            <div class="drawer-actions">
-                <button class="new-session-btn" onclick="startNewSession()">+ 새 대화 시작</button>
-            </div>
-            <div class="session-list" id="sessionList">
-                <!-- 동적 렌더링 -->
-            </div>
-        </div>
-
-        <!-- 내 오답노트 / 메모리 모달 -->
-        <div class="modal-overlay" id="memoryModalBackdrop" onclick="toggleMemoryModal()">
-            <div class="modal memory-modal" onclick="event.stopPropagation()">
-                <div class="modal-header">
-                    <h2>🐱 에이전트 메모리 & 오답 노트</h2>
-                    <button class="close-btn" onclick="toggleMemoryModal()">✕</button>
-                </div>
-                <div class="memory-tabs">
-                    <button class="memory-tab active" id="tabErrorsBtn" onclick="switchMemoryTab('errors')">✏️ 오답 노트</button>
-                    <button class="memory-tab" id="tabFactsBtn" onclick="switchMemoryTab('facts')">📌 장기 기억 프로필</button>
-                </div>
-                <div class="modal-body" id="memoryListBody">
-                    <!-- 동적 렌더링 -->
+            <div class="chat-container" id="chatContainer">
+                <div class="messages" id="messages" role="log" aria-label="대화 내용" aria-live="polite"></div>
+                <div class="starter-prompts" id="starterPrompts">
+                    <button onclick="useStarter('今日はいい天気ですね。')">오늘의 날씨 이야기<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14m-5-5 5 5-5 5"/></svg></button>
+                    <button onclick="useStarter('週末は何をしますか？')">주말 계획 물어보기<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14m-5-5 5 5-5 5"/></svg></button>
                 </div>
             </div>
-        </div>
-
-        <!-- 현재 설정 표시 -->
-        <div class="status-bar" id="statusBar">
-            <span class="status-item" id="difficultyStatus">📚 초급</span>
-            <span class="status-divider">•</span>
-            <span class="status-item" id="roleplayStatus">🎭 일반 대화</span>
-        </div>
-
-        <!-- 채팅 영역 -->
-        <main class="chat-container" id="chatContainer">
-            <div class="messages" id="messages">
-                <!-- 메시지들이 여기에 추가됨 -->
-            </div>
+            <footer class="input-container">
+                <div class="composer">
+                    <div class="input-wrapper"><textarea id="messageInput" aria-label="일본어 대화 메시지" placeholder="어떤 이야기를 나눠 볼까요?" rows="1" onkeydown="handleKeyDown(event)"></textarea></div>
+                    <button class="send-btn" id="sendBtn" aria-label="메시지 보내기" onclick="sendMessage()"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5m-6 6 6-6 6 6"/></svg></button>
+                </div>
+                <p class="composer-hint">일본어가 떠오르지 않으면 한국어로 말해도 괜찮아요.<span>Enter 전송 · Shift + Enter 줄바꿈</span></p>
+            </footer>
         </main>
-
-        <!-- 입력 영역 -->
-        <footer class="input-container">
-            <div class="input-wrapper">
-                <textarea 
-                    id="messageInput" 
-                    placeholder="메시지를 입력하세요..."
-                    rows="1"
-                    onkeydown="handleKeyDown(event)"
-                ></textarea>
-            </div>
-            <button class="send-btn" id="sendBtn" onclick="sendMessage()">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/>
-                </svg>
+        <aside class="learning-sidebar" aria-label="일본어 연습">
+            <div class="aside-heading"><div><p class="eyebrow">SMALL TALK, REAL LIFE</p><h2>오늘은 어떤 상황으로?</h2></div><span class="aside-decoration" lang="ja">話</span></div>
+            <p class="aside-copy">일본에서 마주칠 순간들.<br>여기서 먼저, 편안하게 연습해 봐요.</p>
+            <div class="scene-list"><button class="scene-card" onclick="startScenario('cafe_order')">
+        <span class="scene-art scene-art-0" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 9h11v6a5.5 5.5 0 0 1-11 0V9Zm11 1h2a3 3 0 1 1 0 6h-2M4 22h14M8 2v3m5-3v3"/></svg><span>珈琲</span></span>
+        <span class="scene-copy"><strong>카페에서 주문하기</strong><span>따뜻한 라떼 한 잔부터 시작해요</span></span><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14m-5-5 5 5-5 5"/></svg>
+    </button><button class="scene-card" onclick="startScenario('airport_checkin')">
+        <span class="scene-art scene-art-1" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m22 2-7 20-4-9-9-4 20-7ZM11 13 22 2"/></svg><span>旅</span></span>
+        <span class="scene-copy"><strong>공항에서 체크인</strong><span>여행의 첫마디를 가볍게 연습해요</span></span><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14m-5-5 5 5-5 5"/></svg>
+    </button><button class="scene-card" onclick="startScenario('convenience_store')">
+        <span class="scene-art scene-art-2" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10h18l-2-6H5l-2 6Zm1 0v10h16V10M9 20v-7h6v7M3 10c0 3 4 3 4 0 0 3 5 3 5 0 0 3 5 3 5 0 0 3 4 3 4 0"/></svg><span>日常</span></span>
+        <span class="scene-copy"><strong>편의점에 들러서</strong><span>일상에서 자주 쓰는 표현을 배워요</span></span><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14m-5-5 5 5-5 5"/></svg>
+    </button></div>
+            <button class="all-scenes" onclick="toggleSettings()">다른 상황도 둘러보기<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14m-5-5 5 5-5 5"/></svg></button>
+            <p id="sceneError" class="inline-error" role="alert"></p>
+            <button class="practice-entry" onclick="openLearning('practice')">
+                <span class="practice-entry-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5c-3-2-6-2-9-1v15c3-1 6-1 9 1 3-2 6-2 9-1V4c-3-1-6-1-9 1Zm0 0v15"/></svg></span><span><span class="eyebrow">A LITTLE BETTER, EVERY DAY</span><strong>오늘의 표현, 내 것으로</strong><span>틀렸던 문장을 다시 써 보는 짧은 복습</span></span><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14m-5-5 5 5-5 5"/></svg>
             </button>
-        </footer>
-
+            <div class="margin-note"><span class="note-rule"></span><p lang="ja">まちがえても、だいじょうぶ。</p><span>틀려도 괜찮아요. 그만큼 배우고 있으니까요.</span></div>
+        </aside>
+    </div>
+    <footer class="page-footer"><span>small words, new worlds.</span><p>매일의 한마디가 쌓이는 곳, 니혼고챗</p></footer>
+</div>
+<div class="drawer-backdrop" id="drawerBackdrop" onclick="toggleSessionDrawer()"></div>
+<aside class="drawer" id="sessionDrawer" role="dialog" aria-modal="true" aria-label="대화 기록">
+    <div class="drawer-header"><div><p class="eyebrow">OUR CONVERSATIONS</p><h3>나눴던 이야기</h3></div><button class="close-btn" aria-label="대화 기록 닫기" onclick="toggleSessionDrawer()"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 6 12 12M6 18 18 6"/></svg></button></div>
+    <div class="drawer-actions"><button class="new-session-btn" onclick="startNewSession()">+ 새 대화 시작</button></div>
+    <div class="session-list" id="sessionList"></div>
+</aside>
+<div class="modal-overlay" id="memoryModalBackdrop" onclick="toggleMemoryModal()">
+    <div class="modal memory-modal" role="dialog" aria-modal="true" aria-labelledby="memoryTitle" onclick="event.stopPropagation()">
+        <div class="modal-header"><div><p class="eyebrow">YOUR LITTLE NOTEBOOK</p><h2 id="memoryTitle">나의 학습 노트</h2></div><button class="close-btn" aria-label="학습 노트 닫기" onclick="toggleMemoryModal()"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 6 12 12M6 18 18 6"/></svg></button></div>
+        <div class="memory-tabs">
+            <button class="memory-tab" id="tabPracticeBtn" onclick="switchMemoryTab('practice')">오늘의 복습</button>
+            <button class="memory-tab active" id="tabErrorsBtn" onclick="switchMemoryTab('errors')">오답 노트</button>
+            <button class="memory-tab" id="tabFactsBtn" onclick="switchMemoryTab('facts')">대화 기록</button>
+        </div>
+        <div class="modal-body" id="memoryListBody"></div>
+    </div>
+</div>
         <!-- 설정 모달 -->
         <div class="modal-overlay" id="settingsModal" onclick="closeSettingsOnOverlay(event)">
-            <div class="modal">
+            <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
                 <div class="modal-header">
-                    <h2>⚙️ 설정</h2>
-                    <button class="close-btn" onclick="toggleSettings()">×</button>
+                    <div><p class="eyebrow">MAKE IT YOURS</p><h2 id="settingsTitle">나에게 맞는 대화</h2></div>
+                    <button class="close-btn" aria-label="설정 닫기" onclick="toggleSettings()"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 6 12 12M6 18 18 6"/></svg></button>
                 </div>
                 <div class="modal-body">
                     <!-- 대화 상대 이름 -->
                     <div class="setting-section">
-                        <label class="setting-label">👤 대화 상대 이름</label>
+                        <label class="setting-label" for="partnerName">대화 상대 이름</label>
                         <input type="text" id="partnerName" value="유키" placeholder="유키">
                     </div>
 
                     <!-- 난이도 -->
                     <div class="setting-section">
-                        <label class="setting-label">📚 난이도</label>
+                        <label class="setting-label">나의 일본어 수준</label>
                         <div class="segmented-control">
                             <button class="segment active" data-value="beginner" onclick="selectDifficulty(this)">초급</button>
                             <button class="segment" data-value="intermediate" onclick="selectDifficulty(this)">중급</button>
@@ -121,8 +114,8 @@
 
                     <!-- MCP 롤플레잉 프롬프트 세션 -->
                     <div class="setting-section">
-                        <label class="setting-label">🎭 상황별 롤플레잉 (MCP Prompts)</label>
-                        <p class="setting-hint">MCP 규격 표준 프롬프트 기반으로 특정 상황을 체험합니다.</p>
+                        <label class="setting-label">이야기하고 싶은 상황</label>
+                        <p class="setting-hint">카페, 공항, 호텔에서 쓸 표현을 연습해 보세요.</p>
                         <div class="roleplay-grid" id="roleplayContainer">
                             <!-- JS로 동적 생성 -->
                         </div>
@@ -133,24 +126,24 @@
 
                     <!-- 표시 설정 -->
                     <div class="setting-section">
-                        <label class="setting-label">🎨 표시 설정</label>
+                        <label class="setting-label">읽기를 도와드릴까요?</label>
                         <div class="toggle-row">
                             <div class="toggle-info">
                                 <span class="toggle-title">번역 보기</span>
                                 <span class="toggle-subtitle">AI 메시지를 클릭하면 한국어 번역을 볼 수 있어요</span>
                             </div>
                             <label class="switch">
-                                <input type="checkbox" id="showTranslation" checked>
+                                <input type="checkbox" id="showTranslation" aria-label="번역 보기" checked>
                                 <span class="slider"></span>
                             </label>
                         </div>
                         <div class="toggle-row">
                             <div class="toggle-info">
-                                <span class="toggle-title">후리가나 보기</span>
+                                <span class="toggle-title">읽는 법 보기</span>
                                 <span class="toggle-subtitle">AI 메시지를 클릭하면 읽는 법을 볼 수 있어요</span>
                             </div>
                             <label class="switch">
-                                <input type="checkbox" id="showFurigana" checked>
+                                <input type="checkbox" id="showFurigana" aria-label="읽는 법 보기" checked>
                                 <span class="slider"></span>
                             </label>
                         </div>
@@ -158,13 +151,10 @@
                 </div>
                 <div class="modal-footer">
                     <p id="settingsError" role="alert"></p>
-                    <button class="save-btn" id="saveSettingsBtn" onclick="saveSettings()">저장</button>
+                    <button class="save-btn" id="saveSettingsBtn" onclick="saveSettings()">설정 저장하기</button>
                 </div>
             </div>
         </div>
-    </div>
-
-    <script src="/static/app.js?v=session-integrity-3"></script>
+<script src="/static/app.js?v=quiet-garden-5"></script>
 </body>
 </html>
-
