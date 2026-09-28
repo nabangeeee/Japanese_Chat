@@ -20,7 +20,7 @@ function setup() {
     const storage = map => ({ setItem(key, value) {
         if (env.failCache) throw new Error('QuotaExceededError');
         map.set(key, value);
-    }, removeItem: key => map.delete(key), getItem: key => map.get(key) });
+    }, removeItem: key => map.delete(key), getItem: key => { if (env.failRead) throw new Error('SecurityError'); return map.get(key); } });
     const context = vm.createContext({
         crypto: require('node:crypto').webcrypto,
         console: { log() {}, error() {} }, alert: x => warnings.push(x), confirm: () => true,
@@ -40,6 +40,30 @@ function setup() {
 }
 
 const tests = {
+    async settingsRecovery() {
+        for (const saved of ['{broken', 'null', '[]', '42', '{"partnerName":null,"difficulty":"unknown","roleplayArgs":null,"showTranslation":"false"}']) {
+            const h = setup();
+            h.local.set('nihongoSettings', saved);
+            h.run('loadSettings()');
+            assert.equal(h.get('partnerName').value, '유키');
+            assert.equal(h.run('state.settings.difficulty'), 'beginner');
+            assert.equal(h.run('state.settings.showTranslation'), true);
+            assert.equal(h.run('JSON.stringify(state.settings.roleplayArgs)'), '{}');
+            assert.equal(JSON.parse(h.local.get('nihongoSettings')).apiKey, '');
+        }
+        const blocked = setup();
+        blocked.env.failRead = true;
+        blocked.run('loadSettings()');
+        assert.equal(blocked.get('partnerName').value, '유키');
+        const valid = setup();
+        valid.local.set('nihongoSettings', JSON.stringify({partnerName:'Hana', difficulty:'advanced', showTranslation:false, roleplayId:'cafe_order', roleplayArgs:{place:'Tokyo'}, apiKey:'obsolete-key'}));
+        valid.run('loadSettings()');
+        assert.equal(valid.get('partnerName').value, 'Hana');
+        assert.equal(valid.run('state.settings.difficulty'), 'advanced');
+        assert.equal(valid.run('state.settings.showTranslation'), false);
+        assert.equal(valid.run('state.settings.roleplayArgs.place'), 'Tokyo');
+        assert.equal(valid.run('state.settings.apiKey'), '');
+    },
     async scenarioAndStarter() {
         const h = setup();
         h.run("useStarter('今日はいい天気ですね。')");

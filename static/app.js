@@ -128,9 +128,29 @@ function renderRoleplayArgsForm() {
 
 // 설정 로드
 function loadSettings() {
-    const saved = localStorage.getItem('nihongoSettings');
-    if (saved) {
-        state.settings = { ...state.settings, ...JSON.parse(saved) };
+    try {
+        const saved = JSON.parse(localStorage.getItem('nihongoSettings') || 'null');
+        if (saved && typeof saved === 'object' && !Array.isArray(saved)) {
+            for (const key of ['partnerName', 'topic']) {
+                if (typeof saved[key] === 'string') state.settings[key] = saved[key];
+            }
+            if (Object.prototype.hasOwnProperty.call(DIFFICULTY_NAMES, saved.difficulty)) {
+                state.settings.difficulty = saved.difficulty;
+            }
+            if (saved.roleplayId === null || typeof saved.roleplayId === 'string') {
+                state.settings.roleplayId = saved.roleplayId;
+            }
+            if (saved.roleplayArgs && typeof saved.roleplayArgs === 'object' && !Array.isArray(saved.roleplayArgs)) {
+                state.settings.roleplayArgs = Object.fromEntries(
+                    Object.entries(saved.roleplayArgs).filter(([, value]) => typeof value === 'string')
+                );
+            }
+            for (const key of ['showTranslation', 'showFurigana']) {
+                if (typeof saved[key] === 'boolean') state.settings[key] = saved[key];
+            }
+        }
+    } catch (err) {
+        console.error('Settings cache read failed; using defaults:', err);
     }
     // Credentials are server-managed; discard keys saved by older providers.
     state.settings.apiKey = '';
