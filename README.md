@@ -32,6 +32,13 @@ OpenAI `gpt-6-astra` handles chat, learning utilities, quality review, and the d
 - **학습 노트 → 오늘의 복습** shows up to three due expressions per visit. Write a correction, reveal the example, and self-assess: difficult expressions return after one day; remembered expressions return after seven days. This practice flow makes no model calls.
 - Session summaries update every three completed conversation turns. Existing conversations and notes are preserved by additive database migrations on server startup.
 
+### Relevant learning memory (local RAG)
+- Chat retrieves up to three relevant corrections from the existing SQLite learning notebook instead of always including the five newest notes. Older notes remain searchable.
+- Ranking uses the current message, the last four conversation messages, the topic, and roleplay settings. Current-message matches receive the greatest weight. Japanese/Korean character matching and a small bilingual vocabulary support common café, airport, hotel, and other situations.
+- No matching notes means no notebook context. Duplicate corrections are suppressed; retrieved text is length-limited and presented as study data, with notebook IDs, rather than instructions.
+- This is lexical retrieval, not embedding-based semantic search: arbitrary paraphrases and hiragana-only expressions may be missed. No extra model calls, dependency, vector service, or database migration is required. Search scans the notebook locally; a larger corpus may require an index.
+- It uses the application's existing single-learner notebook scope. Separate users would require ownership filtering before enabling shared hosting. The optional external-collection token settings in `rag_access.py` are separate from this internal notebook feature.
+
 ### 2. ☁️ Asynchronous Learning Utilities
 - OpenAI executes session summarization, grammar error extraction, and negative-feedback analysis through FastAPI `BackgroundTasks`.
 - No on-device model server or model weights are required.

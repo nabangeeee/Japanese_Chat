@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 
 from security_filters import redact_sensitive_output, scan_prompt_injection
 from rag_access import rag_access_configured
+from memory_retrieval import retrieve_memories, memory_context
 from mcp_prompts import list_mcp_prompts, get_mcp_prompt_instruction
 from database import (
     init_db, create_session, get_all_sessions, get_session, delete_session,
@@ -168,7 +169,7 @@ def _scan_history_for_injection(history: list) -> None:
             _assert_no_prompt_injection(content)
 
 
-def get_system_prompt(partner_name: str, difficulty: str, topic: str, roleplay_id: str | None = None, roleplay_args: dict | None = None, session_id: str | None = None) -> str:
+def get_system_prompt(partner_name: str, difficulty: str, topic: str, roleplay_id: str | None = None, roleplay_args: dict | None = None, session_id: str | None = None, message: str = "", history: list | None = None) -> str:
     difficulty_prompt = DIFFICULTY_PROMPTS.get(difficulty, DIFFICULTY_PROMPTS["beginner"])
     topic_prompt = TOPIC_PROMPTS.get(topic, TOPIC_PROMPTS["free"])
     
@@ -178,13 +179,9 @@ def get_system_prompt(partner_name: str, difficulty: str, topic: str, roleplay_i
         if rp_text:
             roleplay_instruction = f"\n\n[Active Roleplay Scenario (MCP Prompt)]\n{rp_text}"
     
-    memory_instruction = ""
-    memories = get_user_memories(limit=5)
-    if memories:
-        mem_lines = []
-        for m in memories:
-            mem_lines.append(f"- Correction: {m['original_text']} -> {m['corrected_text']} ({m['explanation']})")
-        memory_instruction = f"\n\n[Learner's Past Weaknesses & Memory Notes]\nThe learner previously made these mistakes. If natural, gently help them practice these grammar points:\n" + "\n".join(mem_lines)
+    memory_instruction = memory_context(retrieve_memories(
+        message, history, topic, roleplay_id, roleplay_args,
+    ))
 
     # 장기 메모리 요약본 및 유저 프로필 팩트 동적 주입
     # 유저 팩트는 한 번만 조회하여 장기 메모리와 피드백 규칙 모두에 재사용한다.
@@ -579,13 +576,15 @@ async def chat(req: ChatRequest, bg_tasks: BackgroundTasks):
 
     try:
         start_t = time.time()
-        sys_prompt = get_system_prompt(
+        sys_prompt = await run_in_threadpool(get_system_prompt,
             req.partner_name, 
             req.difficulty, 
             req.topic, 
             req.roleplay_id, 
             req.roleplay_args,
-            req.session_id
+            req.session_id,
+            message=req.message,
+            history=req.history,
         )
 
         search_keywords = ["검색", "뉴스", "트렌드", "최신", "search", "news", "trend"]
