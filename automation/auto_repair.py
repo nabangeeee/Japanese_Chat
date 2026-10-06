@@ -39,9 +39,12 @@ def daily_claim():
 
 
 def deployment_ready(sha, *, attempts=40, pause=15):
+    deadline = time.monotonic() + min(600, attempts * (pause + 20))
     for _ in range(attempts):
+        if time.monotonic() >= deadline:
+            break
         try:
-            with httpx.Client(timeout=20) as client:
+            with httpx.Client(timeout=10) as client:
                 status = client.get(SITE+'/api/auth/status')
                 home = client.get(SITE+'/')
                 denied = client.get(SITE+'/api/sessions')
@@ -73,7 +76,7 @@ def rollback(candidate):
 def main():
     daily_claim()
     baseline = improvement._git_head(ROOT)
-    if not baseline or not deployment_ready(baseline,attempts=2,pause=5):
+    if not baseline or not deployment_ready(baseline,attempts=8,pause=10):
         raise RuntimeError('Current deployment is not healthy or does not match main')
     workspace = improvement._create_worktree(ROOT,baseline)
     if not workspace:
