@@ -19,6 +19,33 @@ from zoneinfo import ZoneInfo
 ROOT = Path(__file__).resolve().parent
 TURNS = 3
 MAX_SECONDS = 240
+SCENARIOS = (
+    ('park', 'a walk in a park', 'one small particle mistake'),
+    ('cafe', 'ordering a drink at a cafe', 'mix a Korean word into Japanese'),
+    ('travel', 'asking for directions to a station', 'a short hesitant reply'),
+    ('shopping', 'buying clothes', 'a small typo'),
+    ('weekend', 'weekend plans', 'one small tense mistake'),
+    ('restaurant', 'ordering dinner', 'two short sentences with a reason'),
+    ('hobby', 'a favorite hobby', 'asking for a simpler explanation'),
+)
+
+
+def daily_scenario(day=None):
+    day = day or datetime.now(ZoneInfo('Asia/Seoul')).date()
+    return SCENARIOS[day.toordinal() % len(SCENARIOS)]
+
+
+def regression_checks():
+    """Run deterministic account/UI regressions even when today's paid run is cached."""
+    result = subprocess.run([
+        sys.executable, '-m', 'unittest', 'discover', '-s', 'tests',
+        '-p', 'test_cloud_integration.py',
+    ], cwd=ROOT, capture_output=True, timeout=45)
+    require(result.returncode == 0, '계정 격리 회귀 검사 실패')
+    result = subprocess.run(['node', 'tests/frontend_integrity_harness.js'],
+                            cwd=ROOT, capture_output=True, timeout=30)
+    require(result.returncode == 0, '화면 상태·학습노트·대화 원문 회귀 검사 실패')
+    return '계정 격리·화면 상태·학습노트·대화 원문 회귀 검사 통과 (모의 환경)'
 
 
 class CheckFailed(RuntimeError):
@@ -42,6 +69,9 @@ def exercise(client, learner, *, email, password, owner, verify_remote, report):
     identity = checked(client.get('/api/auth/me'), '계정 확인')
     require(identity['user_id'] == owner, '설정한 테스트 User UID와 로그인 계정이 다름')
     report['checks'].append('로그인·계정 확인·비로그인 차단')
+    stale = client.get('/api/memories', headers={'X-Nihongo-User': str(uuid.uuid4())})
+    require(stale.status_code == 409, '이전 계정 탭의 학습노트 요청이 허용됨')
+    report['checks'].append('이전 계정 탭 요청 차단')
     title = '[자동 검증] ' + datetime.now(ZoneInfo('Asia/Seoul')).isoformat(timespec='seconds')
     session = checked(client.post('/api/sessions', json={
         'title': title, 'partner_name': '유키', 'difficulty': 'beginner', 'topic': 'free',
@@ -71,9 +101,26 @@ def exercise(client, learner, *, email, password, owner, verify_remote, report):
             '재전송이 기존 답변을 재사용하지 않음')
     verify_remote(client, owner, session_id, history)
     report['checks'].append('Supabase 직접 재조회·중복 방지·대화 요약 저장')
+    notes = checked(client.get('/api/facts'), '학습노트 요약 조회')
+    require(any(s['session_id'] == session_id and s['summary'].strip()
+                for s in notes['summaries']), '학습노트에서 새 대화 요약 누락')
+    for endpoint in ('/api/memories', '/api/memories/practice'):
+        memories = checked(client.get(endpoint), '학습노트 조회')['memories']
+        require(all(m.get('user_id') == owner for m in memories), '학습노트 소유자 불일치')
+    require(all(f.get('user_id') == owner for f in notes['facts']), '장기 기억 소유자 불일치')
+    report['checks'].append('학습노트·복습·장기 기억 소유자·요약 연결')
     checked(client.post('/api/auth/logout'), '로그아웃')
-    require(client.get('/api/sessions').status_code == 401, '로그아웃 뒤 기록 접근 가능')
+    for endpoint in ('/api/sessions', '/api/sessions/' + session_id, '/api/facts', '/api/memories'):
+        require(client.get(endpoint).status_code == 401, '로그아웃 뒤 기록 접근 가능')
     report['checks'].append('로그아웃 차단')
+    checked(client.post('/api/auth/login', json={'email': email, 'password': password}), '재로그인')
+    try:
+        restored = checked(client.get('/api/sessions/' + session_id), '재로그인 후 대화 원문')['messages']
+        require([(m['id'], m['role'], m['content']) for m in restored] == expected,
+                '재로그인 후 대화 원문 불일치 또는 중복')
+        report['checks'].append('재로그인 후 대화 원문 6개 복원')
+    finally:
+        checked(client.post('/api/auth/logout'), '재로그인 검증 종료')
 
 
 def execute_live(report):
@@ -95,11 +142,13 @@ def execute_live(report):
     import cloud_store
 
     meter = BudgetedLLM(ROOT, os.environ['OPENAI_API_KEY'])
+    scenario_id, topic, variation = daily_scenario()
+    report['scenario'] = scenario_id
     def learner(history, turn):
         return meter.generate(json.dumps({'history': history, 'turn': turn + 1}, ensure_ascii=False),
-            instructions='Simulate a beginner Japanese learner talking about a walk in a park. '
-            'Reply with exactly one short Japanese sentence under 100 characters. '
-            'Include a small natural grammar mistake. Do not request tools or web searches.',
+            instructions=f'Simulate a beginner Japanese learner talking about {topic}. '
+            'Reply with one or two short sentences, mainly in Japanese, under 100 characters. '
+            f'Naturally include {variation}. Do not request tools or web searches.',
             max_output_tokens=256).strip()
 
     def verify_remote(client, owner, session_id, history):
@@ -115,6 +164,12 @@ def execute_live(report):
             summaries = checked(remote.get(url + '/rest/v1/session_summaries',
                 params={**params, 'select': 'summary_text'}), 'Supabase 요약 조회')
             require(len(summaries) == 1 and bool(summaries[0]['summary_text'].strip()), '대화 요약이 저장되지 않음')
+            for table in ('sessions', 'messages', 'user_memories', 'session_summaries',
+                          'user_facts', 'message_feedbacks'):
+                foreign = checked(remote.get(url + '/rest/v1/' + table, params={
+                    'user_id': 'neq.' + owner, 'select': 'user_id', 'limit': '1'}), '타인 기록 차단 조회')
+                require(foreign == [], '타인 기록이 노출됨: ' + table)
+            report['checks'].append('6개 테이블 타인 기록 조회 차단 (실제 Supabase)')
 
     marker = experiment_meter.set(meter)
     try:
@@ -176,6 +231,11 @@ def main():
     if args.worker:
         worker(args.worker)
         return
+    try:
+        print('확인: ' + regression_checks())
+    except (CheckFailed, OSError, subprocess.TimeoutExpired) as exc:
+        print('[고정 회귀 검사] 실패: ' + (str(exc) if isinstance(exc, CheckFailed) else type(exc).__name__))
+        return 1
     report = run_report()
     print('[니혼고챗 실제 앱 자동 검증] ' + report['status'])
     for check in report['checks']:

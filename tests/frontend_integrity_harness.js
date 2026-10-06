@@ -43,6 +43,25 @@ function setup() {
 }
 
 const tests = {
+    async accountChangeRejectsInflightNotes() {
+        const h = setup();
+        let finish;
+        h.env.reply = () => new Promise(resolve => { finish = resolve; });
+        h.run("installAccountGuard('account-a')");
+        const pending = h.run("fetch('/api/memories')");
+        h.env.onstorage({key:'nihongoAccountChange'});
+        finish({ok:true, status:200, json:async () => ({memories:[{id:'private'}]})});
+        await assert.rejects(pending);
+        assert.equal(h.run('state.memories.length'), 0);
+    },
+    async accountMismatchClearsNotes() {
+        const h = setup();
+        h.run("state.memories = [{id:'private'}]; installAccountGuard('account-a')");
+        h.env.reply = async () => ({status:409, clone: () => ({json:async () => ({detail:'ACCOUNT_CHANGED'})})});
+        await assert.rejects(h.run("fetch('/api/memories')"));
+        assert.equal(h.run('state.memories.length'), 0);
+        assert.equal(h.env.reloaded, true);
+    },
     async accountSwitchClearsScreen() {
         const h = setup();
         h.run("state.messages = [{id:'private'}]; state.memories = [{id:1}]; installAccountGuard('account-a')");

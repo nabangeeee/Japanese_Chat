@@ -206,7 +206,7 @@ def main():
     # first, under the same daily $1 ledger and a dedicated authenticated user.
     import sys
     live = subprocess.run([sys.executable, str(ROOT / 'app_e2e.py')], cwd=ROOT,
-                          capture_output=True, text=True, timeout=260)
+                          capture_output=True, text=True, timeout=330)
     print(live.stdout.strip() or '[실제 앱 검증] 실행 결과 없음')
     print(run_nightly(project_root=ROOT)['text'])
 
