@@ -8,10 +8,6 @@ from fastapi import HTTPException
 identity = ContextVar('supabase_identity', default=None)
 
 
-def enabled():
-    return os.getenv('DATABASE_BACKEND', 'sqlite') == 'supabase'
-
-
 def settings():
     url = os.getenv('SUPABASE_URL', '').rstrip('/')
     key = os.getenv('SUPABASE_PUBLISHABLE_KEY', '')

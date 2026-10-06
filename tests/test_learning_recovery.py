@@ -1,33 +1,28 @@
-"""Recovery and learning persistence, using isolated SQLite and mocked inference."""
+"""Recovery and learning persistence, using an in-memory Supabase API double and mocked inference."""
 import asyncio
 import os
 from pathlib import Path
 import tempfile
 import threading
-import sqlite3
 import unittest
 import uuid
 from unittest.mock import patch
 
 with patch.dict(os.environ, {'LANGFUSE_TRACING_ENABLED': 'false'}), patch('dotenv.load_dotenv'):
-    import database
+    import cloud_store as database
     import main
 from fastapi import BackgroundTasks, HTTPException
 
 
 class LearningRecoveryTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        temp = tempfile.TemporaryDirectory()
-        self.addCleanup(temp.cleanup)
-        db_patch = patch.object(database, 'DB_PATH', str(Path(temp.name) / 'test.db'))
-        db_patch.start()
-        self.addCleanup(db_patch.stop)
-        database.init_db()
+        from cloud_fixture import cloud_fixture
+        self.enterContext(cloud_fixture())
         database.create_session('session', 'test', 'Yuki', 'beginner', 'free')
         provider = patch.object(main, 'generate_text', return_value='こんにちは。')
         self.generate = provider.start()
         self.addCleanup(provider.stop)
-        repair = patch.object(main, '_schedule_autonomous_repair')
+        repair = patch.object(main, '_schedule_autonomous_repair', create=True)
         repair.start()
         self.addCleanup(repair.stop)
 
@@ -92,7 +87,7 @@ class LearningRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(database.get_practice_memories()), 1)
         reviewed = {item['id']: item for item in database.get_user_memories()}
         self.assertLess(reviewed[items[0]['id']]['next_review_at'], reviewed[items[1]['id']]['next_review_at'])
-        database.init_db()  # Migrations are safe to rerun and retain practice progress.
+        database.init_db()  # Connection settings validation does not reset progress.
         self.assertEqual(len(database.get_practice_memories()), 1)
         self.assertEqual(reviewed[items[0]['id']]['review_count'], 1)
         with self.assertRaises(HTTPException) as caught:
@@ -101,7 +96,7 @@ class LearningRecoveryTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_chat_pair_rolls_back_if_second_insert_fails(self):
         database.save_message('assistant', 'session', 'assistant', 'existing')
-        with self.assertRaises(sqlite3.IntegrityError):
+        with self.assertRaises(ValueError):
             database.save_chat_turn('user', 'assistant', 'session', 'question', 'answer', 1)
         self.assertIsNone(database.get_message('user'))
         self.assertEqual(database.get_message('assistant')['content'], 'existing')
@@ -119,18 +114,6 @@ class LearningRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(results[0], results[1])
         self.assertEqual(len(database.get_session_messages('session')), 2)
         self.assertEqual(sum(bool(task.tasks) for task in tasks), 1)
-
-    async def test_legacy_notes_are_preserved_by_migration(self):
-        with database.get_db_connection() as conn:
-            conn.execute('DROP TABLE user_memories')
-            conn.execute('CREATE TABLE user_memories (id INTEGER PRIMARY KEY, category TEXT, original_text TEXT, corrected_text TEXT, explanation TEXT, created_at TEXT)')
-            conn.execute("INSERT INTO user_memories VALUES (5, 'Grammar Error', 'original', 'corrected', 'reason', '2026-01-01')")
-        database.init_db()
-        item = database.get_practice_memories()[0]
-        self.assertEqual(item['id'], 5)
-        self.assertEqual(item['corrected_text'], 'corrected')
-        self.assertEqual(item['review_count'], 0)
-        self.assertIsNone(item['next_review_at'])
 
     async def test_summary_skips_intermediate_turns(self):
         with patch.object(main, 'get_session_messages', return_value=[{'role': 'user', 'content': 'hello'}] * 8):

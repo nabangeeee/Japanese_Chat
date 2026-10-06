@@ -24,7 +24,7 @@ class ProviderOutputError(RuntimeError):
 def generate_text(api_key: str, prompt: str, *, instructions: str = "",
                   history: list | None = None, web_search: bool = False,
                   max_output_tokens: int = 2048,
-                  json_schema: dict | None = None) -> str:
+                  json_schema: dict | None = None, account_usage: bool = True) -> str:
     messages = [
         {"role": item["role"], "content": item["content"]}
         for item in (history or [])[-10:]
@@ -44,7 +44,7 @@ def generate_text(api_key: str, prompt: str, *, instructions: str = "",
         for attempt in range(3):
             try:
                 import cloud_store
-                if cloud_store.enabled():
+                if account_usage:
                     cloud_store.consume_usage()
                 meter = experiment_meter.get()
                 response = meter.request(kwargs) if meter is not None else client.responses.create(**kwargs)

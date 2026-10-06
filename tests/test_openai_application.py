@@ -18,7 +18,7 @@ class ApplicationProviderTests(unittest.TestCase):
         for route, req in [(main.chat, main.ChatRequest(message='こんにちは', api_key='key')), (main.multi_chat, main.ChatRequest(message='こんにちは', api_key='key')), (main.translate, main.TranslateRequest(text='こんにちは', api_key='key')), (main.furigana, main.TranslateRequest(text='学校', api_key='key'))]:
             for status in [401, 403, 429, 503]:
                 error = APIStatusError('SECRET_PROVIDER_BODY', response=httpx.Response(status, request=request), body=None)
-                with self.subTest(route=route.__name__, status=status), patch('main.generate_text', side_effect=error) as generate, patch('main.get_system_prompt', return_value='system'), patch('main._schedule_autonomous_repair') as repair:
+                with self.subTest(route=route.__name__, status=status), patch('main.generate_text', side_effect=error) as generate, patch('main.get_system_prompt', return_value='system'), patch('main._schedule_autonomous_repair', create=True) as repair:
                     with self.assertRaises(HTTPException) as raised:
                         asyncio.run(route(req, BackgroundTasks()))
                     self.assertEqual(raised.exception.status_code, status)
@@ -28,7 +28,7 @@ class ApplicationProviderTests(unittest.TestCase):
 
     def test_all_foreground_routes_and_feedback_use_openai(self):
         self.assertTrue(hasattr(main, 'generate_text'), 'routes still use old provider')
-        with patch.dict(os.environ, {'OPENAI_API_KEY':'server-key'}), patch('main.generate_text') as generate, patch('main.get_system_prompt', return_value='system'), patch('main.save_message_feedback', return_value={}), patch('main._schedule_autonomous_repair') as repair:
+        with patch.dict(os.environ, {'OPENAI_API_KEY':'server-key'}), patch('main.generate_text') as generate, patch('main.get_system_prompt', return_value='system'), patch('main.save_message_feedback', return_value={}), patch('main._schedule_autonomous_repair', create=True) as repair:
             generate.return_value = 'こんにちは。'
             tasks = BackgroundTasks()
             result = asyncio.run(main.chat(main.ChatRequest(message='news', api_key=''), tasks))

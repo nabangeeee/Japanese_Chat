@@ -1,4 +1,4 @@
-"""Local lexical RAG over the existing single-learner SQLite notebook.
+"""Lexical RAG over the authenticated user’s Supabase notebook.
 
 No embeddings or provider calls. CJK character features support unsegmented
 Japanese; a small bilingual vocabulary bridges common roleplay situations.
@@ -8,7 +8,7 @@ import math
 import re
 import unicodedata
 
-from database import get_db_connection
+import cloud_store
 from security_filters import scan_prompt_injection
 
 
@@ -69,7 +69,7 @@ def retrieve_memories(message="", history=None, topic="free", roleplay_id=None,
     """Rank all saved notes, deduplicate, and return at most five bounded notes.
 
     Current utterance dominates context; unrelated notes are never used as a
-    recency fallback. This shares the app's existing single-learner DB scope.
+    recency fallback. Supabase RLS restricts notes to the authenticated user.
     """
     limit = max(0, min(limit, 5))
     if not limit:
@@ -87,23 +87,19 @@ def retrieve_memories(message="", history=None, topic="free", roleplay_id=None,
         return []
 
     def candidates():
-        import cloud_store
-        from contextlib import nullcontext
-        with (nullcontext() if cloud_store.enabled() else get_db_connection()) as conn:
-            rows = (cloud_store.get_user_memories(1000) if cloud_store.enabled() else
-                    conn.execute("SELECT id, original_text, corrected_text, explanation FROM user_memories"))
-            for row in rows:
-                note = {key: (row[key] or "")[:300] for key in
-                        ("original_text", "corrected_text", "explanation")}
-                text = " ".join(note.values())
-                if scan_prompt_injection(text):
-                    continue
-                document = _features(text)
-                score = (3 * _similarity(current, document)
-                         + 0.5 * _similarity(context, document)
-                         + _similarity(scenario, document))
-                if score > 0:
-                    yield score, row["id"], note
+        rows = cloud_store.get_user_memories(1000)
+        for row in rows:
+            note = {key: (row[key] or "")[:300] for key in
+                    ("original_text", "corrected_text", "explanation")}
+            text = " ".join(note.values())
+            if scan_prompt_injection(text):
+                continue
+            document = _features(text)
+            score = (3 * _similarity(current, document)
+                     + 0.5 * _similarity(context, document)
+                     + _similarity(scenario, document))
+            if score > 0:
+                yield score, row["id"], note
 
     # Keep only the best distinct corrections while streaming the entire table.
     best = {}

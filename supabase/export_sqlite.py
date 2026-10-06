@@ -57,6 +57,7 @@ def main():
     parser.add_argument('--owner', required=True, type=UUID)
     parser.add_argument('--source-timezone', required=True,
                         help='Timezone of naive timestamps written by the original app')
+    parser.add_argument('--source', type=Path, help='Archived SQLite database to export')
     args = parser.parse_args()
     zone = ZoneInfo(args.source_timezone)
     root = Path(__file__).resolve().parents[1]
@@ -67,7 +68,8 @@ def main():
     output = folder / f'supabase-import-{stamp}.sql'
     fd = os.open(backup, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     os.close(fd)
-    source = sqlite3.connect((root / 'nihongo_chat.db').as_uri() + '?mode=ro', uri=True)
+    source_path = (args.source or root / 'nihongo_chat.db').resolve()
+    source = sqlite3.connect(source_path.as_uri() + '?mode=ro', uri=True)
     dest = sqlite3.connect(backup)
     try:
         source.backup(dest)

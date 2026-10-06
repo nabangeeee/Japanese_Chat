@@ -5,7 +5,7 @@ from fastapi import FastAPI, BackgroundTasks
 from fastapi.testclient import TestClient
 import cloud_store
 from cloud_auth import SupabaseAuthMiddleware, auth_router
-import database
+import cloud_store as database
 
 
 class CloudIntegrationTests(unittest.TestCase):
@@ -54,12 +54,10 @@ class CloudIntegrationTests(unittest.TestCase):
         self.assertIn('HttpOnly', result.headers['set-cookie'])
         self.assertEqual(self.client.post('/api/auth/logout', headers={'Origin':'https://attacker.example'}).status_code, 403)
 
-    def test_database_dispatch_has_no_sqlite_fallback(self):
-        with patch('cloud_store.get_all_sessions', return_value=[{'session_id':'cloud'}]) as cloud:
-            self.assertEqual(database.get_all_sessions()[0]['session_id'], 'cloud')
-            cloud.assert_called_once()
-        with self.assertRaises(RuntimeError):
-            database.get_db_connection()
+    def test_backend_flag_cannot_disable_authentication(self):
+        for value in ('sqlite', '', 'supabase'):
+            with patch.dict(os.environ, {'DATABASE_BACKEND': value}):
+                self.assertEqual(self.client.get('/api/records').status_code, 401)
 
     def test_stale_tab_cannot_access_new_account(self):
         user = {'id': '11111111-1111-4111-8111-111111111111', 'email': 'test@example.com'}

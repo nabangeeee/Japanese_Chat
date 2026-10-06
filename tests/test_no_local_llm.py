@@ -28,9 +28,9 @@ class LocalLlmRemovalTests(unittest.TestCase):
 
         self.assertEqual(matches, [])
 
-    def test_runtime_errors_enter_durable_repair_queue(self) -> None:
+    def test_cloud_runtime_does_not_enqueue_private_errors(self) -> None:
         main_source = (ROOT / "main.py").read_text(encoding="utf-8")
-        self.assertIn("enqueue_runtime_incident", main_source)
+        self.assertNotIn("enqueue_runtime_incident", main_source)
         self.assertNotIn("run_autonomous_repair", main_source)
         self.assertNotIn("diagnose_with_hermes", main_source)
 

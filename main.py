@@ -17,7 +17,7 @@ from security_filters import redact_sensitive_output, scan_prompt_injection
 from rag_access import rag_access_configured
 from memory_retrieval import retrieve_memories, memory_context
 from mcp_prompts import list_mcp_prompts, get_mcp_prompt_instruction
-from database import (
+from cloud_store import (
     init_db, create_session, get_all_sessions, get_session, delete_session,
     get_session_messages, save_user_memory, get_user_memories,
     save_session_summary, get_session_summary, save_user_fact, get_all_user_facts,
@@ -25,12 +25,8 @@ from database import (
     get_message, save_message_detail, get_saved_turn, save_chat_turn,
     get_practice_memories, record_memory_review
 )
-from autonomous_repair import enqueue_runtime_incident
-from continuous_improvement import record_quality_incident
 from contextlib import asynccontextmanager
-import traceback
 import uuid
-import cloud_store
 from cloud_auth import SupabaseAuthMiddleware, auth_router
 
 load_dotenv()
@@ -348,7 +344,6 @@ RULE: (1-sentence rule in natural Korean)"""
         print(f"[Feedback Refinement Error] {e}")
 
 
-QUALITY_REPAIR_THRESHOLD = 6.0
 
 
 def parse_quality_judgement(raw: str) -> tuple[float, str] | None:
@@ -415,24 +410,9 @@ REASON: (brief Korean reason)
             update_message_quality_score(message_id, score)
         print(f"[LLM-as-a-Judge] Score={score:.1f}, reason={reason}")
 
-        if score < QUALITY_REPAIR_THRESHOLD and not cloud_store.enabled():
-            record_quality_incident(
-                score=score,
-                reason=redact_sensitive_output(reason),
-                difficulty=difficulty,
-                topic=topic,
-                user_text=redact_sensitive_output(user_text),
-                ai_text=redact_sensitive_output(ai_text),
-            )
     except Exception as e:
         print(f"[LLM-as-a-Judge Error] {e}")
 
-
-
-def _schedule_autonomous_repair(error_trace: str) -> None:
-    """오류만 내구성 큐에 저장한다. 실제 수정은 별도 worker가 수행한다."""
-    if not cloud_store.enabled():
-        enqueue_runtime_incident(redact_sensitive_output(error_trace))
 
 
 def _provider_http_error(exc: Exception) -> HTTPException:
@@ -658,8 +638,6 @@ async def chat(req: ChatRequest, bg_tasks: BackgroundTasks):
     except (APIError, ProviderOutputError) as exc:
         raise _provider_http_error(exc) from None
     except Exception:
-        err_trace = traceback.format_exc()
-        _schedule_autonomous_repair(err_trace)
         raise HTTPException(status_code=500, detail="서버 내부 오류가 발생했습니다.")
 
 
@@ -728,7 +706,6 @@ async def multi_chat(req: ChatRequest, bg_tasks: BackgroundTasks):
     except (APIError, ProviderOutputError) as exc:
         raise _provider_http_error(exc) from None
     except Exception:
-        _schedule_autonomous_repair(traceback.format_exc())
         raise HTTPException(status_code=500, detail="서버 내부 오류가 발생했습니다.")
 
 
@@ -777,7 +754,6 @@ async def translate(req: TranslateRequest, bg_tasks: BackgroundTasks):
     except (APIError, ProviderOutputError) as exc:
         raise _provider_http_error(exc) from None
     except Exception:
-        _schedule_autonomous_repair(traceback.format_exc())
         raise HTTPException(status_code=500, detail="서버 내부 오류가 발생했습니다.")
 
 
@@ -824,7 +800,6 @@ async def furigana(req: TranslateRequest, bg_tasks: BackgroundTasks):
     except (APIError, ProviderOutputError) as exc:
         raise _provider_http_error(exc) from None
     except Exception:
-        _schedule_autonomous_repair(traceback.format_exc())
         raise HTTPException(status_code=500, detail="서버 내부 오류가 발생했습니다.")
 
 

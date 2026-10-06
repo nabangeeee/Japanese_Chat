@@ -146,7 +146,7 @@ Return a JSON object with an items array. Each item has keys: source_form, word,
         last_error: Exception | None = None
         for _ in range(2):
             raw = generate_text(
-                api_key, prompt, max_output_tokens=6000,
+                api_key, prompt, max_output_tokens=6000, account_usage=False,
                 json_schema=VocabularyDigest.model_json_schema(),
             )
             try:

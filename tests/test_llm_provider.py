@@ -5,6 +5,9 @@ from types import SimpleNamespace
 
 
 class ProviderTests(unittest.TestCase):
+    def setUp(self):
+        self.enterContext(patch('cloud_store.consume_usage'))
+
     def test_search_citations_survive_as_safe_source_links(self):
         from llm_provider import generate_text
         annotation = SimpleNamespace(type='url_citation', url='https://example.com/a?q=1', title='source')

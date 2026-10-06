@@ -29,6 +29,11 @@ assert.equal((await db.query(turn)).rows[0].result.created,true);
 assert.equal((await db.query(turn)).rows[0].result.created,false);
 assert.equal((await db.query('select count(*)::int as n from public.messages')).rows[0].n,2);
 await assert.rejects(db.query("select public.save_chat_turn('u','a','s','changed','reply',0.5)"));
+// Failure on the second message must roll back the first message too.
+await assert.rejects(db.query("select public.save_chat_turn('rollback-user','a','s','question','answer',0.5)"));
+assert.equal((await db.query("select * from public.messages where id='rollback-user'")).rows.length,0);
+await db.exec("insert into public.message_feedbacks(message_id,session_id,rating) values('a','s',-1)");
+await assert.rejects(db.query("insert into public.message_feedbacks(message_id,session_id,rating) values('missing','s',1)"));
 await asUser(b);
 for (const table of ['sessions','messages','user_memories','session_summaries','user_facts','message_feedbacks','legacy_feedbacks']) {
     assert.equal((await db.query(`select * from public.${table}`)).rows.length,0);

@@ -1,4 +1,4 @@
-"""Offline API integrity tests: isolated SQLite and no provider/network calls."""
+"""Offline API integrity tests: an in-memory Supabase API double and no provider/network calls."""
 import asyncio
 import os
 from pathlib import Path
@@ -9,7 +9,7 @@ from unittest.mock import patch
 import uuid
 
 with patch.dict(os.environ, {"LANGFUSE_TRACING_ENABLED": "false"}), patch("dotenv.load_dotenv"):
-    import database
+    import cloud_store as database
     import main
 
 from fastapi import BackgroundTasks, HTTPException
@@ -20,16 +20,12 @@ class APIIntegrityTests(unittest.IsolatedAsyncioTestCase):
         tracing = patch.dict(os.environ, {"LANGFUSE_TRACING_ENABLED": "false"})
         tracing.start()
         self.addCleanup(tracing.stop)
-        self.tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.tmp.cleanup)
-        self.db_patch = patch.object(database, "DB_PATH", str(Path(self.tmp.name) / "test.db"))
-        self.db_patch.start()
-        self.addCleanup(self.db_patch.stop)
-        database.init_db()
+        from cloud_fixture import cloud_fixture
+        self.enterContext(cloud_fixture())
         self.provider = patch.object(main, "generate_text", side_effect=AssertionError("Unexpected provider call"))
         self.mock_provider = self.provider.start()
         self.addCleanup(self.provider.stop)
-        self.repair = patch.object(main, "_schedule_autonomous_repair")
+        self.repair = patch.object(main, "_schedule_autonomous_repair", create=True)
         self.mock_repair = self.repair.start()
         self.addCleanup(self.repair.stop)
 

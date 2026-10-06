@@ -128,7 +128,6 @@ def execute_live(report):
     load_dotenv(ROOT / '.env')
     load_dotenv(ROOT / '.env.supabase')
     load_dotenv(ROOT / '.env.e2e', override=True)
-    require(os.getenv('DATABASE_BACKEND') == 'supabase', 'Supabase 모드가 아님')
     names = ('NIHONGO_TEST_EMAIL', 'NIHONGO_TEST_PASSWORD', 'NIHONGO_TEST_USER_ID')
     require(all(os.getenv(name) for name in names), '.env.e2e 테스트 전용 계정 설정 필요')
     owner = str(uuid.UUID(os.environ['NIHONGO_TEST_USER_ID']))

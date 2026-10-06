@@ -16,18 +16,18 @@
 Supabase의 관리자와 service_role은 RLS를 우회하므로 앱의 사용자 요청에는
 사용자 JWT를 사용해야 합니다. 관리자 키를 클라이언트에 넣으면 안 됩니다.
 
-앱은 `DATABASE_BACKEND=supabase`일 때 Supabase Auth와 Data API를 사용합니다.
+앱은 Supabase Auth와 Data API만 사용합니다. `DATABASE_BACKEND` 설정은 더 이상 필요하지 않습니다.
 `.env.supabase` 또는 배포 환경에 `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`를
 설정하세요. 공개 키는 `sb_publishable_` 형식입니다. 사용자 토큰은 HttpOnly 쿠키로
 관리하고 요청마다 Auth 서버에서 검증합니다. 기록 조회·저장에는 그 사용자의 JWT를
 전달하므로 RLS가 적용됩니다. 연결 실패 시 SQLite로 우회하지 않습니다.
-SQLite 모드는 기존 로컬 도구·백업·단위 테스트를 위해 남겨 두었습니다.
-외부 배포 시 반드시 Supabase 모드를 설정하세요.
+Supabase 설정이 없으면 앱 시작을 거부합니다. 로그인은 항상 필요합니다.
 
 AI 사용량은 계정별 하루 100회 API 시도로 제한합니다(한국 시간 기준).
 답변 외에 번역, 후리가나, 요약, 품질 평가, 문법 분석, 재시도도 포함됩니다.
-이는 대화 100턴을 뜻하지 않습니다. 기존 SQLite를 직접 읽는 아침 학습 요약과
-밤 9시 품질 관찰 작업은 아직 Supabase의 새 기록을 읽지 않습니다.
+이는 대화 100턴을 뜻하지 않습니다. 아침 학습 요약과 밤 9시 품질 관찰도
+별도 예약 작업 계정 설정으로 본인 Supabase 기록을 읽습니다. 아침 단어 생성은
+앱의 사용자 요청 한도와 별개인 운영 작업입니다.
 
 ## 다음 기록 이전 작업에서 지킬 사항
 
@@ -90,8 +90,10 @@ SQLite로 대체하지 않고 작업을 실패 처리합니다. 관리자 키는
 `scratch/digests/<본인 UID>/`에 분리됩니다. 기존 캐시와 SQLite 백업은 보존합니다.
 예약 시각과 Hermes의 기존 Telegram 전달 방식은 그대로입니다.
 
-SQLite 구현은 아직 로컬 테스트와 이전 도구에서 사용하므로 이 변경만으로 원본 DB나
-`database.py` 전체를 삭제하지 않습니다.
+앱의 SQLite 구현과 루트 DB는 제거했습니다. 복구용 DB는 `scratch/backups/`에
+보관합니다. 이전 도구는 `--source /절대/경로/백업.db`로 보관된 DB를 읽을 수 있습니다.
+로컬 API 검사는 메모리 기반 Data API 모의 환경을 사용하며, DB 제약·RLS·RPC는
+`tests/supabase_sql_harness.mjs`의 PostgreSQL 검사로 검증합니다.
 
 밤 10시 기존 Hermes 작업도 이 검사를 먼저 실행한 뒤 합성 품질 실험을 실행합니다.
 두 작업은 기존의 하루 $1 예산 기록을 공유합니다. 각 앱 검증은 최대 240초이며,

@@ -45,7 +45,7 @@ class SupabaseAuthMiddleware:
         self.app = app
 
     async def __call__(self, scope, receive, send):
-        if scope['type'] != 'http' or not store.enabled() or not scope['path'].startswith('/api/'):
+        if scope['type'] != 'http' or not scope['path'].startswith('/api/'):
             return await self.app(scope, receive, send)
         request = Request(scope, receive)
         if request.method not in ('GET', 'HEAD', 'OPTIONS') and not same_origin(request):
@@ -98,7 +98,7 @@ class Credentials(BaseModel):
 
 @auth_router.get('/status')
 async def status():
-    return JSONResponse({'enabled': store.enabled()}, headers={'Cache-Control': 'no-store'})
+    return JSONResponse({'enabled': True}, headers={'Cache-Control': 'no-store'})
 
 
 @auth_router.get('/me')
@@ -108,8 +108,6 @@ async def me():
 
 @auth_router.post('/login')
 async def login(body: Credentials, request: Request):
-    if not store.enabled():
-        raise HTTPException(409, 'Supabase 연결 설정이 필요합니다.')
     data = await auth_call('token?grant_type=password', data=body.model_dump())
     response = JSONResponse({'signed_in': True}, headers={'Cache-Control': 'no-store'})
     cookies(response, data, request)
@@ -118,8 +116,6 @@ async def login(body: Credentials, request: Request):
 
 @auth_router.post('/signup')
 async def signup(body: Credentials, request: Request):
-    if not store.enabled():
-        raise HTTPException(409, 'Supabase 연결 설정이 필요합니다.')
     data = await auth_call('signup', data=body.model_dump())
     response = JSONResponse({'signed_in': bool(data.get('access_token')),
                              'message': '메일함에서 가입 확인 메일을 확인해 주세요.'},
@@ -132,7 +128,7 @@ async def signup(body: Credentials, request: Request):
 @auth_router.post('/logout')
 async def logout(request: Request):
     token = request.cookies.get('nihongo_access_token')
-    if token and store.enabled():
+    if token:
         try:
             await auth_call('logout?scope=local', token=token, data={})
         except HTTPException:

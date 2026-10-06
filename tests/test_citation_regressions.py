@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-import database
+import cloud_store as database
 from llm_provider import generate_text
 from main import clean_japanese_text
 
@@ -45,7 +45,7 @@ def generate_with_citations(urls):
             for annotation in annotations
         ],
     ]
-    with patch("llm_provider.OpenAI") as factory:
+    with patch("llm_provider.OpenAI") as factory, patch("cloud_store.consume_usage"):
         factory.return_value.__enter__.return_value.responses.create.return_value = (
             SimpleNamespace(status="completed", output_text="東京です。", output=messages)
         )
@@ -127,12 +127,11 @@ class CitationRegressionTests(unittest.TestCase):
         url = 'https://example.com/東京(a)?q="b"&x=1'
         expected_url = "https://example.com/%E6%9D%B1%E4%BA%AC%28a%29?q=%22b%22&x=1"
         cleaned = clean_japanese_text(generate_with_citations([url, url]))
-        with tempfile.TemporaryDirectory() as temp_dir:
-            with patch.object(database, "DB_PATH", str(Path(temp_dir) / "citations.db")):
-                database.init_db()
-                database.create_session("citation-session", "test", "ユキ", "beginner", "free")
-                database.save_message("citation-message", "citation-session", "assistant", cleaned)
-                loaded = database.get_session_messages("citation-session")
+        from cloud_fixture import cloud_fixture
+        with cloud_fixture():
+            database.create_session("citation-session", "test", "ユキ", "beginner", "free")
+            database.save_message("citation-message", "citation-session", "assistant", cleaned)
+            loaded = database.get_session_messages("citation-session")
         self.assertEqual(len(loaded), 1)
         self.assertEqual(loaded[0]["content"], cleaned)
         self.assertEqual(loaded[0]["role"], "assistant")

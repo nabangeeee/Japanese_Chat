@@ -33,7 +33,7 @@ OpenAI `gpt-6-astra` handles chat, learning utilities, quality review, and the d
 - Session summaries update every three completed conversation turns. Existing conversations and notes are preserved by additive database migrations on server startup.
 
 ### Relevant learning memory (local RAG)
-- Chat retrieves up to three relevant corrections from the existing SQLite learning notebook instead of always including the five newest notes. Older notes remain searchable.
+- Chat retrieves up to three relevant corrections from the authenticated user’s Supabase learning notebook instead of always including the five newest notes. Older notes remain searchable.
 - Ranking uses the current message, the last four conversation messages, the topic, and roleplay settings. Current-message matches receive the greatest weight. Japanese/Korean character matching and a small bilingual vocabulary support common café, airport, hotel, and other situations.
 - No matching notes means no notebook context. Duplicate corrections are suppressed; retrieved text is length-limited and presented as study data, with notebook IDs, rather than instructions.
 - This is lexical retrieval, not embedding-based semantic search: arbitrary paraphrases and hiragana-only expressions may be missed. No extra model calls, dependency, vector service, or database migration is required. Search scans the notebook locally; a larger corpus may require an index.
@@ -113,8 +113,8 @@ OpenAI `gpt-6-astra` handles chat, learning utilities, quality review, and the d
    │  ├── ☁️ OpenAI GPT-6 Astra (Summary / Grammar / Feedback / Judge / Digest)
    │  └── ⚙️ Hermes Agent CLI (Runtime Repair + Approved Improvements)
    ▼
-4. Persistence Layer (database.py)
-      └── 💾 SQLite DB - nihongo_chat.db (sessions, messages, memories, summaries, facts, feedbacks)
+4. Persistence Layer (cloud_store.py)
+      └── 💾 Supabase PostgreSQL + per-user RLS (sessions, messages, memories, summaries, facts, feedbacks)
 ```
 
 ---
@@ -134,7 +134,7 @@ Japanese/
 ├── morning_digest.py            # Recent chats → validated Telegram study digest
 ├── notifications.py             # Telegram delivery via configured Hermes gateway
 ├── mcp_prompts.py              # MCP standard roleplay prompt definitions
-├── database.py                 # SQLite database manager (6 tables persistence)
+├── cloud_store.py              # Supabase Data API using the authenticated user JWT
 ├── security_filters.py         # 2-step security guardrail (Prompt injection & data redaction)
 ├── templates/
 │   └── index.html              # Main web UI template

@@ -12,7 +12,7 @@ class ProviderBillingTests(unittest.TestCase):
                 error = RateLimitError('quota', response=httpx.Response(429,
                     request=httpx.Request('POST', 'https://api.openai.com/v1/responses')),
                     body={'code': code, 'type': 'insufficient_quota'})
-                with patch('llm_provider.OpenAI') as client, patch('llm_provider.time.sleep') as sleep, patch('cloud_store.enabled', return_value=False):
+                with patch('llm_provider.OpenAI') as client, patch('llm_provider.time.sleep') as sleep, patch('cloud_store.consume_usage'):
                     create = client.return_value.__enter__.return_value.responses.create
                     create.side_effect = error
                     with self.assertRaises(RateLimitError):

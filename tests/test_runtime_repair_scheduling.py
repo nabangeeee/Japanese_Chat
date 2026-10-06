@@ -1,17 +1,9 @@
-from __future__ import annotations
-
+"""Private cloud requests must not enter local repair incident queues."""
 import unittest
-from unittest.mock import patch
-
 import main
 
-
 class RuntimeRepairSchedulingTests(unittest.TestCase):
-    @patch("main.enqueue_runtime_incident")
-    def test_persists_incident_without_starting_an_agent(self, enqueue) -> None:
-        main._schedule_autonomous_repair("traceback")
-        enqueue.assert_called_once_with("traceback")
-
-
-if __name__ == "__main__":
-    unittest.main()
+    def test_cloud_app_has_no_local_incident_writer(self):
+        self.assertFalse(hasattr(main, '_schedule_autonomous_repair'))
+        self.assertFalse(hasattr(main, 'enqueue_runtime_incident'))
+        self.assertFalse(hasattr(main, 'record_quality_incident'))

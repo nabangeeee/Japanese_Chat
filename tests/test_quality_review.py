@@ -36,7 +36,7 @@ class QualityReviewTests(unittest.TestCase):
             (8.0, "자연스럽고 맥락에 맞습니다."),
         )
 
-    @patch("main.record_quality_incident")
+    @patch("continuous_improvement.record_quality_incident")
     @patch("main.update_message_quality_score")
     @patch("main.generate_text")
     def test_low_score_is_saved_as_observation_only(
@@ -54,14 +54,9 @@ class QualityReviewTests(unittest.TestCase):
         )
 
         update_score.assert_called_once_with("ast_1", 2.0)
-        record_incident.assert_called_once()
-        self.assertEqual(record_incident.call_args.kwargs["score"], 2.0)
-        self.assertIn(
-            "대화 맥락과 무관한 영어 답변",
-            record_incident.call_args.kwargs["reason"],
-        )
+        record_incident.assert_not_called()
 
-    @patch("main.record_quality_incident")
+    @patch("continuous_improvement.record_quality_incident")
     @patch("main.update_message_quality_score")
     @patch("main.generate_text")
     def test_acceptable_score_does_not_create_quality_incident(

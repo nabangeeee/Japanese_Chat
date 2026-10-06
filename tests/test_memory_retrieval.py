@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import patch
 
 with patch.dict(os.environ, {"LANGFUSE_TRACING_ENABLED": "false"}), patch("dotenv.load_dotenv"):
-    import database
+    import cloud_store as database
     import main
 from fastapi import BackgroundTasks
 from memory_retrieval import retrieve_memories, memory_context
@@ -15,12 +15,8 @@ from memory_retrieval import retrieve_memories, memory_context
 
 class MemoryRetrievalTests(unittest.TestCase):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        db = patch.object(database, "DB_PATH", str(Path(tmp.name) / "test.db"))
-        db.start()
-        self.addCleanup(db.stop)
-        database.init_db()
+        from cloud_fixture import cloud_fixture
+        self.enterContext(cloud_fixture())
 
     def note(self, correction, explanation="", original=""):
         return database.save_user_memory("Grammar Error", original, correction, explanation)

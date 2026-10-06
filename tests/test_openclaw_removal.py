@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class OpenClawRemovalTests(unittest.TestCase):
     def test_openclaw_code_and_routes_are_removed(self) -> None:
-        checked_files = [ROOT / "main.py", ROOT / "database.py", ROOT / "README.md"]
+        checked_files = [ROOT / "main.py", ROOT / "cloud_store.py", ROOT / "README.md"]
         matches = []
         for path in checked_files:
             text = path.read_text(encoding="utf-8").lower()
