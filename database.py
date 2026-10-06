@@ -252,7 +252,17 @@ def get_session_messages(session_id: str) -> List[Dict[str, Any]]:
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM messages WHERE session_id = ? ORDER BY timestamp ASC, rowid ASC", (session_id,))
         rows = cursor.fetchall()
-        return [dict(row) for row in rows]
+        feedbacks = {row['message_id']: dict(row) for row in conn.execute(
+            'SELECT message_id, rating, feedback_text FROM message_feedbacks WHERE session_id = ?',
+            (session_id,),
+        )}
+        messages = [dict(row) for row in rows]
+        for message in messages:
+            feedback = feedbacks.get(message['id'])
+            if feedback:
+                message['feedback_rating'] = feedback['rating']
+                message['feedback_text'] = feedback['feedback_text']
+        return messages
 
 
 # --- Learner Memory & Error Note Operations ---

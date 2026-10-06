@@ -76,7 +76,7 @@ class FeedbackRequest(BaseModel):
     message_id: str
     session_id: str | None = None
     rating: int # 1 for like, -1 for dislike
-    feedback_text: str | None = None
+    feedback_text: str | None = Field(default=None, max_length=1000)
     api_key: str | None = None
 
 
@@ -540,6 +540,7 @@ async def api_list_facts():
 @app.post("/api/feedback")
 async def api_submit_feedback(req: FeedbackRequest, bg_tasks: BackgroundTasks):
     """사용자 👍/👎 피드백 수신 및 백그라운드 Self-Refinement 분석"""
+    req.feedback_text = (req.feedback_text or '').strip() or None
     try:
         fb = save_message_feedback(req.message_id, req.session_id, req.rating, req.feedback_text)
     except ValueError as exc:

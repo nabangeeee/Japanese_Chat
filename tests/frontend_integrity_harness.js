@@ -40,6 +40,30 @@ function setup() {
 }
 
 const tests = {
+    async feedbackText() {
+        const h = setup();
+        h.run("state.messages = [{id:'saved',role:'assistant',content:'reply'}]; openFeedback(null, 'saved')");
+        assert.equal(h.requests.length, 0, 'Opening editor must not submit');
+        assert.match(h.get('messages').innerHTML, /어떤 점이 아쉬웠나요/);
+        h.run("updateFeedbackDraft('saved', '  더 쉽게 말해 주세요  ')");
+        h.env.reply = async () => ({ok:false});
+        await h.run("submitFeedback(null, 'saved', -1)");
+        assert.equal(h.run('state.messages[0].feedbackDraft'), '  더 쉽게 말해 주세요  ');
+        assert.equal(h.run('state.messages[0].feedbackOpen'), true);
+        assert.match(h.get('messages').innerHTML, /저장하지 못/);
+        h.env.reply = async () => ({ok:true});
+        await h.run("submitFeedback(null, 'saved', -1)");
+        assert.equal(h.requests.at(-1).body.feedback_text, '더 쉽게 말해 주세요');
+        assert.equal(h.requests.at(-1).body.message_id, 'saved');
+        assert.equal(h.run('state.messages[0].feedbackOpen'), false);
+        h.run("openFeedback(null, 'saved')");
+        assert.equal(h.run('state.messages[0].feedbackDraft'), '더 쉽게 말해 주세요');
+        h.run("updateFeedbackDraft('saved', '   ')");
+        await h.run("submitFeedback(null, 'saved', -1)");
+        assert.equal(h.requests.at(-1).body.feedback_text, null);
+        h.run("openFeedback(null, 'saved'); closeFeedback('saved')");
+        assert.equal(h.requests.length, 3, 'Cancel must not submit');
+    },
     async settingsRecovery() {
         for (const saved of ['{broken', 'null', '[]', '42', '{"partnerName":null,"difficulty":"unknown","roleplayArgs":null,"showTranslation":"false"}']) {
             const h = setup();
@@ -166,7 +190,7 @@ const tests = {
             assert.equal(h.run('state.messages[1].feedback_rating'), 1);
             assert.match(h.get('messages').innerHTML, /like-btn active/);
             assert.doesNotMatch(h.get('messages').innerHTML, /dislike-btn active/);
-            assert.match(h.warnings.at(-1), /피드백.*다시/);
+            assert.match(h.get('messages').innerHTML, /저장하지 못.*다시/);
         }
         h.run('addWelcomeMessage()');
         assert.doesNotMatch(h.get('messages').innerHTML, /submitFeedback/);
@@ -203,7 +227,7 @@ const tests = {
             await Promise.all([first, duplicate]);
             assert.equal(h.run('state.messages[0].feedback_rating'), serverRating);
             assert.doesNotMatch(h.get('messages').innerHTML, /feedback-btn[^>]*disabled/);
-            if (outcome !== 'success') assert.match(h.warnings.at(-1), /피드백.*다시/);
+            if (outcome !== 'success') assert.match(h.get('messages').innerHTML, /저장하지 못.*다시/);
 
             h.env.reply = async request => { serverRating = request.body.rating; return { ok: true }; };
             await h.run('submitFeedback(null, "msg", -1)');

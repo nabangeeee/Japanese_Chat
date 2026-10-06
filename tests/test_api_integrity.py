@@ -37,6 +37,21 @@ class APIIntegrityTests(unittest.IsolatedAsyncioTestCase):
         result = await main.api_create_session(main.CreateSessionRequest(**kwargs))
         return result["session"]["session_id"]
 
+    async def test_feedback_text_round_trip_and_length_limit(self):
+        from pydantic import ValidationError
+        session_id = await self.new_session()
+        database.save_message('feedback-target', session_id, 'assistant', 'こんにちは')
+        tasks = BackgroundTasks()
+        await main.api_submit_feedback(main.FeedbackRequest(
+            message_id='feedback-target', session_id=session_id, rating=-1,
+            feedback_text='  더 쉽게 말해 주세요  ',
+        ), tasks)
+        detail = await main.get_session_detail(session_id)
+        self.assertEqual(detail['messages'][0]['feedback_text'], '더 쉽게 말해 주세요')
+        self.assertEqual(detail['messages'][0]['feedback_rating'], -1)
+        with self.assertRaises(ValidationError):
+            main.FeedbackRequest(message_id='feedback-target', rating=-1, feedback_text='a' * 1001)
+
     async def test_roleplay_arguments_round_trip_and_independent_defaults(self):
         args = {"place": "東京", "preferences": {"drink": "お茶"}}
         session_id = await self.new_session(roleplay_id="cafe", roleplay_args=args)

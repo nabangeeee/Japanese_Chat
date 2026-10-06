@@ -68,6 +68,14 @@ h1 span { color: var(--text-secondary); }
 .feedback-bar { display: flex; gap: 5px; }
 .feedback-btn { background: none; color: var(--text-muted); border: 1px solid transparent; padding: 3px 6px; border-radius: 5px; display: grid; place-items: center; }
 .feedback-btn svg { width: 13px; height: 13px; }
+.feedback-editor { margin: 10px 0; padding: 14px; background: var(--soft); border: 1px solid var(--line); border-radius: 14px; }
+.feedback-editor label { display: block; font-size: 14px; margin-bottom: 8px; }
+.feedback-editor textarea { display: block; width: 100%; box-sizing: border-box; resize: vertical; padding: 10px; font: inherit; font-size: 14px; color: var(--text-primary); background: var(--paper); border: 1px solid var(--line); border-radius: 8px; }
+.feedback-editor p, .feedback-status { font-size: 12px; color: var(--text-secondary); margin: 8px 0; }
+.feedback-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.feedback-actions button { padding: 8px 12px; border-radius: 8px; background: var(--paper); color: var(--text-primary); border: 1px solid var(--line); }
+.feedback-actions button:last-child { background: var(--primary); color: white; }
+.feedback-actions button:disabled { opacity: .6; }
 .feedback-btn:hover, .feedback-btn.active { background: var(--soft); color: var(--accent-ink); border-color: var(--primary-light); }
 .bubble-details { display: none; white-space: normal; background: var(--soft); border-left: 2px solid var(--primary-light); padding: 12px 15px; margin-top: 15px; border-radius: 0 8px 8px 0; }
 .bubble-details.show { display: block; }

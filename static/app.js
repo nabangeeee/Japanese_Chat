@@ -735,9 +735,16 @@ function createMessageHTML(message) {
                         ${canShowDetails ? `<button class="tap-hint" onclick="toggleDetails('${message.id}')">번역 · 읽는 법 ${message.detailsOpen ? '접기' : '보기'}</button>` : ''}
                         ${message.id && message.persisted !== false ? `<div class="feedback-bar" id="feedback-bar-${message.id}">
                             <button class="feedback-btn like-btn ${message.feedback_rating === 1 ? 'active' : ''}" ${pendingFeedback.has(message.id) ? 'disabled' : ''} onclick="submitFeedback(event, '${message.id}', 1)" aria-label="도움이 되었어요" title="도움이 되었어요">${uiIcon('like')}</button>
-                            <button class="feedback-btn dislike-btn ${message.feedback_rating === -1 ? 'active' : ''}" ${pendingFeedback.has(message.id) ? 'disabled' : ''} onclick="submitFeedback(event, '${message.id}', -1)" aria-label="어색한 답장이에요" title="어색하거나 피하고 싶은 답장이에요">${uiIcon('dislike')}</button>
+                            <button class="feedback-btn dislike-btn ${message.feedback_rating === -1 ? 'active' : ''}" ${pendingFeedback.has(message.id) ? 'disabled' : ''} onclick="openFeedback(event, '${message.id}')" aria-label="아쉬운 점 남기기" aria-expanded="${!!message.feedbackOpen}" title="아쉬운 점 남기기">${uiIcon('dislike')}</button>
                         </div>` : ''}
                     </div>
+                    ${message.feedbackOpen ? `<div class="feedback-editor">
+                        <label for="feedback-text-${message.id}">어떤 점이 아쉬웠나요?</label>
+                        <textarea id="feedback-text-${message.id}" rows="3" maxlength="1000" placeholder="예: 일본어가 너무 어려워요. 더 쉽게 말해 주세요." ${pendingFeedback.has(message.id) ? 'disabled' : ''} oninput="updateFeedbackDraft('${message.id}', this.value)">${escapeHTML(message.feedbackDraft || '')}</textarea>
+                        <p>의견은 선택 사항이에요. 다음 답변을 개선하는 데 참고할게요.</p>
+                        <div class="feedback-actions"><button onclick="closeFeedback('${message.id}')" ${pendingFeedback.has(message.id) ? 'disabled' : ''}>취소</button><button onclick="submitFeedback(event, '${message.id}', -1)" ${pendingFeedback.has(message.id) ? 'disabled' : ''}>${pendingFeedback.has(message.id) ? '저장 중…' : '평가 보내기'}</button></div>
+                    </div>` : ''}
+                    ${message.feedbackError ? `<p class="feedback-status" role="alert">${escapeHTML(message.feedbackError)}</p>` : message.feedbackSaved ? '<p class="feedback-status" role="status">평가를 저장했어요.</p>' : ''}
                     <span class="timestamp">${time}</span>
                 </div>
             </div>
@@ -747,15 +754,43 @@ function createMessageHTML(message) {
 
 const pendingFeedback = new Set();
 
+function openFeedback(event, messageId) {
+    if (event) event.stopPropagation();
+    const message = state.messages.find(m => m.id === messageId);
+    if (!message || message.role !== 'assistant' || message.persisted === false || pendingFeedback.has(messageId)) return;
+    message.feedbackOpen = true;
+    message.feedbackDraft ??= message.feedback_text || '';
+    message.feedbackError = '';
+    message.feedbackSaved = false;
+    renderMessages();
+    document.getElementById(`feedback-text-${messageId}`)?.focus();
+}
+
+function updateFeedbackDraft(messageId, value) {
+    const message = state.messages.find(m => m.id === messageId);
+    if (message) message.feedbackDraft = value;
+}
+
+function closeFeedback(messageId) {
+    const message = state.messages.find(m => m.id === messageId);
+    if (!message || pendingFeedback.has(messageId)) return;
+    message.feedbackOpen = false;
+    message.feedbackError = '';
+    renderMessages();
+}
+
 async function submitFeedback(event, messageId, rating) {
     if (event) event.stopPropagation();
     const message = state.messages.find(m => m.id === messageId);
     if (!state.currentSessionId || !messageId || !message || message.role !== 'assistant' || message.persisted === false) return;
     if (pendingFeedback.has(messageId)) return;
+    const sessionId = state.currentSessionId;
+    const feedbackText = rating === -1 ? (message.feedbackDraft || '').trim() || null : null;
+    message.feedbackError = '';
+    message.feedbackSaved = false;
     pendingFeedback.add(messageId);
     try {
         renderMessages();
-        let feedbackText = null;
 
         // 서버에 피드백 저장
         const res = await fetch('/api/feedback', {
@@ -763,7 +798,7 @@ async function submitFeedback(event, messageId, rating) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 message_id: messageId,
-                session_id: state.currentSessionId,
+                session_id: sessionId,
                 rating: rating,
                 feedback_text: feedbackText,
                 api_key: state.settings ? state.settings.apiKey : ''
@@ -772,10 +807,14 @@ async function submitFeedback(event, messageId, rating) {
         
         if (!res.ok) throw new Error('Feedback rejected');
         message.feedback_rating = rating;
-        saveMessages();
+        message.feedback_text = feedbackText;
+        message.feedbackDraft = feedbackText || '';
+        message.feedbackOpen = false;
+        message.feedbackSaved = true;
+        if (state.currentSessionId === sessionId) saveMessages();
     } catch (e) {
         console.error('Submit feedback failed:', e);
-        alert('피드백을 저장하지 못했습니다. 다시 시도해 주세요.');
+        message.feedbackError = '저장하지 못했어요. 작성한 의견은 남아 있으니 다시 시도해 주세요.';
     } finally {
         pendingFeedback.delete(messageId);
         renderMessages();

@@ -23,7 +23,7 @@ class FrontendSessionTests(unittest.TestCase):
 
     def test_integrity_asset_version(self):
         template = (Path(__file__).resolve().parents[1] / 'templates' / 'index.html').read_text()
-        self.assertIn('/static/app.js?v=settings-recovery-7', template)
+        self.assertIn('/static/app.js?v=feedback-8', template)
 
     def test_roleplay_settings_flow(self):
         import subprocess
