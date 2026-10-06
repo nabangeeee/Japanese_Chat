@@ -4,7 +4,7 @@ from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
-from llm_provider import generate_text, ProviderOutputError
+from llm_provider import generate_text, ProviderOutputError, billing_error
 from openai import APIError, APIStatusError, APIConnectionError
 from langfuse import observe
 import json
@@ -30,8 +30,11 @@ from continuous_improvement import record_quality_incident
 from contextlib import asynccontextmanager
 import traceback
 import uuid
+import cloud_store
+from cloud_auth import SupabaseAuthMiddleware, auth_router
 
 load_dotenv()
+load_dotenv('.env.supabase')
 
 
 @asynccontextmanager
@@ -43,6 +46,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="니혼고챗", description="일본어 학습 채팅 앱", lifespan=lifespan)
+app.add_middleware(SupabaseAuthMiddleware)
+app.include_router(auth_router)
 
 
 # 정적 파일 및 템플릿 설정
@@ -169,6 +174,10 @@ def _scan_history_for_injection(history: list) -> None:
             _assert_no_prompt_injection(content)
 
 
+def meaningful_memory(value):
+    return isinstance(value, str) and value.strip().casefold() not in ('', 'none', 'null', 'undefined', 'n/a')
+
+
 def get_system_prompt(partner_name: str, difficulty: str, topic: str, roleplay_id: str | None = None, roleplay_args: dict | None = None, session_id: str | None = None, message: str = "", history: list | None = None) -> str:
     difficulty_prompt = DIFFICULTY_PROMPTS.get(difficulty, DIFFICULTY_PROMPTS["beginner"])
     topic_prompt = TOPIC_PROMPTS.get(topic, TOPIC_PROMPTS["free"])
@@ -185,8 +194,8 @@ def get_system_prompt(partner_name: str, difficulty: str, topic: str, roleplay_i
 
     # 장기 메모리 요약본 및 유저 프로필 팩트 동적 주입
     # 유저 팩트는 한 번만 조회하여 장기 메모리와 피드백 규칙 모두에 재사용한다.
-    facts = get_all_user_facts()
-    profile_facts = [f for f in facts if not f["fact_key"].startswith("disliked_pattern_")]
+    facts = [f for f in get_all_user_facts() if meaningful_memory(f.get('fact_value'))]
+    profile_facts = [f for f in facts if not (f.get("fact_key") or '').startswith("disliked_pattern_")]
 
     long_term_instruction = ""
     if session_id:
@@ -204,7 +213,7 @@ def get_system_prompt(partner_name: str, difficulty: str, topic: str, roleplay_i
 
     # 유저 피드백 기반 금지/개선 규칙 동적 주입 (최신 중복 제거 2개로 제한)
     feedback_instruction = ""
-    disliked_rules = [f["fact_value"] for f in facts if f["fact_key"].startswith("disliked_pattern_")]
+    disliked_rules = [f["fact_value"] for f in facts if (f.get("fact_key") or '').startswith("disliked_pattern_")]
     if disliked_rules:
         # 중복 규칙 제거 후 최신 2개만 프롬프트 주입
         unique_rules = list(dict.fromkeys(disliked_rules))
@@ -330,6 +339,8 @@ RULE: (1-sentence rule in natural Korean)"""
             out = generate_text(api_key, prompt)
             if "RULE:" in out:
                 rule = out.split("RULE:")[1].strip()
+                if not meaningful_memory(rule) or len(rule) > 1000 or scan_prompt_injection(rule):
+                    return
                 fact_key = f"disliked_pattern_{int(time.time())}"
                 save_user_fact(fact_key, rule)
                 print(f"[OpenAI Feedback Refinement] Created accurate rule: {rule}")
@@ -404,7 +415,7 @@ REASON: (brief Korean reason)
             update_message_quality_score(message_id, score)
         print(f"[LLM-as-a-Judge] Score={score:.1f}, reason={reason}")
 
-        if score < QUALITY_REPAIR_THRESHOLD:
+        if score < QUALITY_REPAIR_THRESHOLD and not cloud_store.enabled():
             record_quality_incident(
                 score=score,
                 reason=redact_sensitive_output(reason),
@@ -420,15 +431,22 @@ REASON: (brief Korean reason)
 
 def _schedule_autonomous_repair(error_trace: str) -> None:
     """오류만 내구성 큐에 저장한다. 실제 수정은 별도 worker가 수행한다."""
-    enqueue_runtime_incident(redact_sensitive_output(error_trace))
+    if not cloud_store.enabled():
+        enqueue_runtime_incident(redact_sensitive_output(error_trace))
 
 
 def _provider_http_error(exc: Exception) -> HTTPException:
+    if getattr(exc, 'code', None) == 'credit_balance_exhausted':
+        return HTTPException(429, 'AI 서비스의 API 크레딧이 소진됐어요. 운영자가 크레딧을 충전한 뒤 다시 이용할 수 있어요.')
+    if billing_error(exc):
+        return HTTPException(429, 'AI 서비스의 결제·사용 한도에 도달했어요. 운영자가 API 결제 설정과 한도를 확인해야 해요.')
     status = 502
     if isinstance(exc, APIStatusError):
         status = exc.status_code if exc.status_code in (401, 403, 429, 503) else 502
     elif isinstance(exc, APIConnectionError):
         status = 503
+    if status == 429:
+        return HTTPException(429, 'AI 요청이 잠시 몰리고 있어요. 잠시 후 다시 시도해 주세요.')
     return HTTPException(status_code=status, detail="OpenAI 요청에 실패했습니다. API 키와 서비스 상태를 확인해 주세요.")
 
 
@@ -522,7 +540,9 @@ async def api_review_memory(memory_id: int, req: MemoryReviewRequest):
 @app.get("/api/facts")
 async def api_list_facts():
     """학습자 장기 기억 프로필 (유저 팩트 및 세션 요약) 목록 반환"""
-    facts = get_all_user_facts()
+    facts = [f for f in get_all_user_facts()
+             if meaningful_memory(f.get('fact_value'))
+             and not (f.get('fact_key') or '').startswith('disliked_pattern_')]
     sessions = get_all_sessions()
     summaries = []
     for s in sessions:

@@ -87,8 +87,11 @@ def retrieve_memories(message="", history=None, topic="free", roleplay_id=None,
         return []
 
     def candidates():
-        with get_db_connection() as conn:
-            rows = conn.execute("SELECT id, original_text, corrected_text, explanation FROM user_memories")
+        import cloud_store
+        from contextlib import nullcontext
+        with (nullcontext() if cloud_store.enabled() else get_db_connection()) as conn:
+            rows = (cloud_store.get_user_memories(1000) if cloud_store.enabled() else
+                    conn.execute("SELECT id, original_text, corrected_text, explanation FROM user_memories"))
             for row in rows:
                 note = {key: (row[key] or "")[:300] for key in
                         ("original_text", "corrected_text", "explanation")}

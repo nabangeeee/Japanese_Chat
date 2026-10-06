@@ -36,7 +36,8 @@ const sendBtn = document.getElementById('sendBtn');
 const settingsModal = document.getElementById('settingsModal');
 
 // 초기화
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
+    if (!(await initializeAccount())) return;
     loadSettings();
     initSessionSystem();
     fetchMcpPrompts();
@@ -44,6 +45,69 @@ document.addEventListener('DOMContentLoaded', () => {
     // 자동 높이 조절
     messageInput.addEventListener('input', autoResize);
 });
+
+async function initializeAccount() {
+    const panel = document.getElementById('accountPanel');
+    try {
+        const status = await fetch('/api/auth/status');
+        if (!status.ok) throw new Error();
+        const config = await status.json();
+        if (!config.enabled) return true;
+        // Personal caches from the single-user app must never cross accounts.
+        for (const key of ['nihongoMessages', 'nihongoSettings']) localStorage.removeItem(key);
+        sessionStorage.removeItem('nihongoActiveSessionId');
+        const me = await fetch('/api/auth/me');
+        if (me.ok) {
+            panel.hidden = true;
+            document.getElementById('accountLogout').hidden = false;
+            return true;
+        }
+        if (me.status !== 401) throw new Error();
+        panel.hidden = false;
+        document.querySelector('.app').inert = true;
+        document.getElementById('accountEmail').focus();
+    } catch (error) {
+        panel.hidden = false;
+        document.querySelector('.app').inert = true;
+        document.getElementById('accountError').textContent = '연결 상태를 확인한 뒤 새로고침해 주세요.';
+    }
+    return false;
+}
+
+async function submitAccount(event, signup = false) {
+    event.preventDefault();
+    const form = document.getElementById('accountForm');
+    if (!form.reportValidity()) return;
+    const buttons = form.querySelectorAll('button');
+    buttons.forEach(button => button.disabled = true);
+    const error = document.getElementById('accountError');
+    error.textContent = '';
+    try {
+        const response = await fetch('/api/auth/' + (signup ? 'signup' : 'login'), {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({email: document.getElementById('accountEmail').value.trim(),
+                                  password: document.getElementById('accountPassword').value})
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(typeof result.detail === 'string' ? result.detail : '입력 내용을 확인해 주세요.');
+        document.getElementById('accountPassword').value = '';
+        if (result.signed_in) location.reload();
+        else error.textContent = result.message;
+    } catch (exception) {
+        error.textContent = exception.message || '로그인하지 못했어요. 다시 시도해 주세요.';
+    } finally {
+        buttons.forEach(button => button.disabled = false);
+    }
+}
+
+async function logoutAccount() {
+    const response = await fetch('/api/auth/logout', {method: 'POST'});
+    if (!response.ok) return;
+    localStorage.removeItem('nihongoMessages');
+    localStorage.removeItem('nihongoSettings');
+    sessionStorage.removeItem('nihongoActiveSessionId');
+    location.reload();
+}
 
 function autoResize() {
     messageInput.style.height = 'auto';

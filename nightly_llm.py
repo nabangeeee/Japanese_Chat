@@ -88,6 +88,20 @@ class BudgetedLLM:
         if json_schema is not None:
             kwargs['text'] = {'format': {'type': 'json_schema', 'name': 'nightly',
                                         'strict': True, 'schema': json_schema}}
+        return self.request(kwargs).output_text
+
+    def request(self, request_kwargs):
+        """Meter the actual app Responses request without replacing its prompts."""
+        kwargs = dict(request_kwargs)
+        if set(kwargs) - {'model', 'input', 'instructions', 'reasoning', 'max_output_tokens',
+                           'store', 'service_tier', 'text'}:
+            raise ValueError('Tools and additional provider options are not allowed in experiments')
+        if kwargs.get('model') != MODEL:
+            raise ValueError('Unexpected experiment model')
+        max_output_tokens = kwargs.get('max_output_tokens')
+        if type(max_output_tokens) is not int or not 16 <= max_output_tokens <= 2048:
+            raise ValueError('Output token limit must be 16..2048')
+        kwargs.update(store=False, service_tier='default')
         encoded = json.dumps(kwargs, ensure_ascii=False).encode('utf-8')
         if len(encoded) > 16000:
             raise ValueError('Nightly request is too large')
@@ -119,4 +133,4 @@ class BudgetedLLM:
                 raise BudgetExceeded('Usage exceeded conservative reservation; stopped for inspection')
         if response.status != 'completed' or not response.output_text.strip():
             raise RuntimeError('Nightly provider returned incomplete or empty output')
-        return response.output_text
+        return response

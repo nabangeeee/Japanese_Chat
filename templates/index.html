@@ -5,16 +5,31 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="theme-color" content="#FAF7F2">
     <title>니혼고챗 · 일본어가 일상이 되는 곳</title>
-    <link rel="stylesheet" href="/static/style.css?v=feedback-8">
+    <link rel="stylesheet" href="/static/style.css?v=cloud-memory-9">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;600&family=Noto+Sans+KR:wght@400;500;600;700&display=swap" rel="stylesheet">
 </head>
 <body>
+<section id="accountPanel" class="account-panel" hidden aria-labelledby="accountTitle">
+    <form id="accountForm" class="account-card" onsubmit="submitAccount(event)">
+        <span class="brand-mark" lang="ja">に</span>
+        <h1 id="accountTitle">나만의 일본어 이야기를 이어가요.</h1>
+        <p>로그인하면 대화와 학습 기록이 내 계정에 저장돼요.</p>
+        <label for="accountEmail">이메일</label>
+        <input id="accountEmail" type="email" autocomplete="username" required maxlength="320">
+        <label for="accountPassword">니혼고챗 비밀번호</label>
+        <input id="accountPassword" type="password" autocomplete="current-password" required maxlength="256">
+        <p id="accountError" role="status" aria-live="polite"></p>
+        <button type="submit">로그인</button>
+        <button type="button" onclick="submitAccount(event, true)">새 계정 만들기</button>
+    </form>
+</section>
 <div class="app">
     <header class="header">
         <div class="brand"><span class="brand-mark" lang="ja">に</span><div class="brand-name">니혼고챗<span>NIHONGO, EVERY DAY</span></div></div>
         <nav class="header-nav" aria-label="주요 메뉴">
+            <button id="accountLogout" class="header-btn" hidden onclick="logoutAccount()">로그아웃</button>
             <button class="header-btn" onclick="toggleSessionDrawer()" title="대화 기록"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11a9 9 0 1 1 2.6 7M3 4v7h7"/><path d="M12 7v5l3 2"/></svg><span>대화 기록</span></button>
             <button class="header-btn" onclick="openLearning('errors')" title="학습 노트"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5c-3-2-6-2-9-1v15c3-1 6-1 9 1 3-2 6-2 9-1V4c-3-1-6-1-9 1Zm0 0v15"/></svg><span>학습 노트</span></button>
             <button class="header-btn" onclick="toggleSettings()" title="설정"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3"/><circle cx="15" cy="17" r="3"/></svg><span>설정</span></button>
@@ -81,7 +96,7 @@
         <div class="memory-tabs">
             <button class="memory-tab" id="tabPracticeBtn" onclick="switchMemoryTab('practice')">오늘의 복습</button>
             <button class="memory-tab active" id="tabErrorsBtn" onclick="switchMemoryTab('errors')">오답 노트</button>
-            <button class="memory-tab" id="tabFactsBtn" onclick="switchMemoryTab('facts')">대화 기록</button>
+            <button class="memory-tab" id="tabFactsBtn" onclick="switchMemoryTab('facts')">대화 요약·기억</button>
         </div>
         <div class="modal-body" id="memoryListBody"></div>
     </div>
@@ -155,6 +170,6 @@
                 </div>
             </div>
         </div>
-<script src="/static/app.js?v=feedback-8"></script>
+<script src="/static/app.js?v=cloud-memory-9"></script>
 </body>
 </html>

@@ -103,11 +103,14 @@ class RunnerTests(unittest.TestCase):
         import nightly_learning as n
         from unittest.mock import patch
         self.assertTrue(hasattr(n, 'main'), 'CLI missing')
-        with patch('dotenv.load_dotenv') as load, patch.object(n, 'run_nightly', return_value={'text': '야간 보고'}) as run, patch('builtins.print') as output:
+        from types import SimpleNamespace
+        with patch('dotenv.load_dotenv') as load, patch.object(n, 'run_nightly', return_value={'text': '야간 보고'}) as run, patch('builtins.print') as output, patch.object(n.subprocess, 'run', return_value=SimpleNamespace(stdout='앱 검증 결과')) as live:
             n.main()
             load.assert_called_once_with(n.ROOT / '.env', override=False)
             run.assert_called_once_with(project_root=n.ROOT)
-            output.assert_called_once_with('야간 보고')
+            self.assertEqual(output.call_args_list[0].args, ('앱 검증 결과',))
+            self.assertEqual(output.call_args_list[1].args, ('야간 보고',))
+            self.assertEqual(live.call_args.args[0][1], str(n.ROOT / 'app_e2e.py'))
 
     def test_no_proposal_for_ties_regressions_dirty_or_changed_baseline(self):
         import nightly_learning as n

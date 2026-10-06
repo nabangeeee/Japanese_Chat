@@ -8,6 +8,21 @@ import main
 
 
 class FeedbackMemoryTests(unittest.TestCase):
+    def test_notebook_hides_internal_rules_and_empty_values(self):
+        import asyncio
+        facts = [dict(fact_key='disliked_pattern_1', fact_value='None'),
+                 dict(fact_key='disliked_pattern_2', fact_value='Speak simply'),
+                 dict(fact_key='hobby', fact_value='reading'),
+                 dict(fact_key=None, fact_value='null')]
+        with patch.object(main, 'get_all_user_facts', return_value=facts), patch.object(main, 'get_all_sessions', return_value=[]):
+            result = asyncio.run(main.api_list_facts())
+        self.assertEqual(result['facts'], [facts[2]])
+
+    def test_empty_feedback_is_not_used_in_prompt(self):
+        with patch.object(main, 'get_all_user_facts', return_value=[dict(fact_key='disliked_pattern_1', fact_value='None')]), patch.object(main, 'retrieve_memories', return_value=[]):
+            prompt = main.get_system_prompt('Yuki', 'beginner', 'free')
+        self.assertNotIn('[Feedback-Based Refinement Rules]', prompt)
+
     def test_prompt_uses_two_newest_distinct_feedback_rules(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             with patch.object(database, "DB_PATH", str(Path(temp_dir) / "test.db")):

@@ -9,7 +9,7 @@ from uuid import UUID
 from zoneinfo import ZoneInfo
 
 TABLES = ('sessions', 'messages', 'user_memories', 'session_summaries',
-          'user_facts', 'message_feedbacks')
+          'user_facts', 'message_feedbacks', 'legacy_feedbacks')
 TIMES = {'created_at', 'updated_at', 'timestamp', 'next_review_at'}
 
 
@@ -29,13 +29,16 @@ def build_sql(records, owner):
     ]
     for table in TABLES:
         rows = records[table]
+        if not rows:
+            continue
+        columns = ', '.join('"' + c.replace('"', '""') + '"' for c in rows[0])
         payload = literal(json.dumps(rows, ensure_ascii=False, allow_nan=False))
         statements += [
             f'create temporary table import_{table} on commit drop as '
-            f'select * from jsonb_populate_recordset(null::public.{table}, {payload}::jsonb);',
-            f'insert into public.{table} select * from import_{table} on conflict do nothing;',
+            f'select {columns} from jsonb_populate_recordset(null::public.{table}, {payload}::jsonb);',
+            f'insert into public.{table} ({columns}) select {columns} from import_{table} on conflict do nothing;',
             'do $$ begin if exists ('
-            f'select * from import_{table} except select * from public.{table}'
+            f'select {columns} from import_{table} except select {columns} from public.{table}'
             f") then raise exception 'Import mismatch: {table}'; end if; end $$;",
         ]
     for table in ('user_memories', 'user_facts', 'message_feedbacks'):
@@ -72,8 +75,11 @@ def main():
         dest.row_factory = sqlite3.Row
         records = {}
         for table in TABLES:
+            if table == 'legacy_feedbacks':
+                records[table] = []
+                continue
             rows = []
-            for row in dest.execute(f'SELECT * FROM {table}'):
+            for row in dest.execute(f'SELECT * FROM {table} ORDER BY rowid'):
                 item = dict(row)
                 item['user_id'] = str(args.owner)
                 for name in TIMES & item.keys():
@@ -91,10 +97,14 @@ def main():
         for row in records['messages'] + records['session_summaries']:
             if row['session_id'] not in sessions:
                 raise ValueError('Orphan session reference: import stopped')
+        linked = []
         for row in records['message_feedbacks']:
             msg = messages.get(row['message_id'])
             if msg is None or row['session_id'] not in (None, msg['session_id']):
-                raise ValueError('Orphan or mismatched feedback: import stopped')
+                records['legacy_feedbacks'].append(row)
+            else:
+                linked.append(row)
+        records['message_feedbacks'] = linked
         sql = build_sql(records, str(args.owner))
         fd = os.open(output, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         with os.fdopen(fd, 'w', encoding='utf-8') as handle:

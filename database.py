@@ -22,6 +22,9 @@ class ClosingConnection(sqlite3.Connection):
 
 
 def get_db_connection():
+    import cloud_store
+    if cloud_store.enabled():
+        raise RuntimeError('Raw SQLite access is disabled in Supabase mode')
     conn = sqlite3.connect(DB_PATH, timeout=5.0, factory=ClosingConnection)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout = 5000")
@@ -461,3 +464,26 @@ def record_memory_review(memory_id: int, remembered: bool) -> bool:
             "UPDATE user_memories SET next_review_at = ?, review_count = review_count + 1 WHERE id = ?",
             (next_review, memory_id),
         ).rowcount == 1
+
+
+# Keep the offline DB for migration and local maintenance. Cloud requests never
+# fall back to it, including when authentication or the network fails.
+def _backend_dispatch(local_function):
+    from functools import wraps
+    @wraps(local_function)
+    def dispatch(*args, **kwargs):
+        import cloud_store
+        target = getattr(cloud_store, local_function.__name__) if cloud_store.enabled() else local_function
+        return target(*args, **kwargs)
+    return dispatch
+
+
+for _operation in (
+    'init_db', 'create_session', 'get_all_sessions', 'get_session', 'delete_session',
+    'update_session_timestamp', 'save_message', 'update_message_quality_score',
+    'get_session_messages', 'save_user_memory', 'get_user_memories', 'save_session_summary',
+    'get_session_summary', 'save_user_fact', 'get_all_user_facts', 'save_message_feedback',
+    'get_negative_feedbacks', 'get_message', 'save_message_detail', 'get_saved_turn',
+    'save_chat_turn', 'get_practice_memories', 'record_memory_review',
+):
+    globals()[_operation] = _backend_dispatch(globals()[_operation])

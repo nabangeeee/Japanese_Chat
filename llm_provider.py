@@ -1,11 +1,20 @@
 """Application inference through OpenAI Responses (not Hermes maintenance)."""
 import time
 import re
+from contextvars import ContextVar
 from urllib.parse import quote, urlsplit
 from typing import Any
 from openai import OpenAI, APIConnectionError, APIStatusError
 
 MODEL = "gpt-6-astra"
+experiment_meter = ContextVar('experiment_meter', default=None)
+QUOTA_ERROR_CODES = {'insufficient_quota', 'credit_balance_exhausted',
+                     'organization_spend_limit_exceeded', 'project_spend_limit_exceeded',
+                     'organization_usage_limit_exceeded'}
+
+
+def billing_error(exc):
+    return getattr(exc, 'code', None) in QUOTA_ERROR_CODES or getattr(exc, 'type', None) == 'insufficient_quota'
 
 
 class ProviderOutputError(RuntimeError):
@@ -34,7 +43,11 @@ def generate_text(api_key: str, prompt: str, *, instructions: str = "",
     with OpenAI(api_key=api_key, timeout=60.0, max_retries=0) as client:
         for attempt in range(3):
             try:
-                response = client.responses.create(**kwargs)
+                import cloud_store
+                if cloud_store.enabled():
+                    cloud_store.consume_usage()
+                meter = experiment_meter.get()
+                response = meter.request(kwargs) if meter is not None else client.responses.create(**kwargs)
                 if response.status != "completed" or not response.output_text.strip():
                     raise ProviderOutputError("OpenAI returned incomplete or empty output")
                 text = response.output_text
@@ -58,6 +71,8 @@ def generate_text(api_key: str, prompt: str, *, instructions: str = "",
                         )
                 return text
             except (APIConnectionError, APIStatusError) as exc:
+                if billing_error(exc):
+                    raise
                 transient = isinstance(exc, APIConnectionError) or exc.status_code in (408, 409, 429) or exc.status_code >= 500
                 if not transient or attempt == 2:
                     raise
