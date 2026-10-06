@@ -54,7 +54,7 @@ OpenAI `gpt-6-astra` handles chat, learning utilities, quality review, and the d
 
 ### 4. 📈 Approval-Gated Continuous Improvement
 - Every generated conversation response is scored asynchronously by an LLM-as-a-Judge.
-- A no-LLM observer checks measured quality, duplicate responses, p95 latency, and explicit negative feedback every day at 21:00 KST.
+- A no-LLM observer checks measured quality, duplicate responses, p95 latency, and explicit negative feedback every day at 21:00 KST. Both this observer and the 08:00 digest read the configured personal account from Supabase using ignored `.env.scheduled` credentials; neither falls back to SQLite.
 - Threshold violations create a persisted proposal under `scratch/improvement/` and send it to Telegram. No code is changed at this stage.
 - Reply `승인 IMP-... <approval-token>` in Telegram to let Hermes reproduce the issue, add a test, make the minimum change, verify the full suite, create one Git commit, and push it to the current `origin` branch. The token binds approval to the exact proposal and Git base commit.
 - The paired Hermes Telegram gateway authenticates the remote sender and passes the bound token to the guarded CLI; direct CLI access is inside the trusted local-OS-user boundary.

@@ -5,7 +5,6 @@ import json
 import fcntl
 import os
 import re
-import sqlite3
 import time
 from datetime import datetime
 from pathlib import Path
@@ -91,20 +90,18 @@ def format_digest(items: list[dict[str, str]]) -> str:
     return "\n".join(lines).strip()
 
 
-def recent_conversation_text(db_path: Path, limit: int = 80) -> str:
-    if not db_path.exists():
-        return ""
-    with sqlite3.connect(db_path, timeout=5.0) as conn:
-        conn.execute("PRAGMA busy_timeout = 5000")
-        rows = conn.execute(
-            "SELECT role, content FROM messages ORDER BY timestamp DESC LIMIT ?", (limit,)
-        ).fetchall()
-    return "\n".join(f"{role}: {content}" for role, content in reversed(rows))
+def recent_conversation_text(project_root: Path, limit: int = 80) -> str:
+    from scheduled_store import reader
+    with reader(project_root) as read:
+        rows = read('messages', columns='role,content', limit=limit,
+                    order='timestamp.desc,sort_order.desc')
+    return "\n".join(f"{row['role']}: {row['content']}" for row in reversed(rows))
 
 
 
 def generate_digest(*, project_root: Path = ROOT) -> str:
-    digest_dir = project_root / "scratch" / "digests"
+    from scheduled_store import owner_id
+    digest_dir = project_root / "scratch" / "digests" / owner_id(project_root)
     digest_dir.mkdir(parents=True, exist_ok=True)
     digest_date = datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat()
     digest_path = digest_dir / f"{digest_date}.json"
@@ -118,7 +115,7 @@ def generate_digest(*, project_root: Path = ROOT) -> str:
         api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
             raise RuntimeError("OPENAI_API_KEY is not configured")
-        dialogue = recent_conversation_text(project_root / "nihongo_chat.db")
+        dialogue = recent_conversation_text(project_root)
         if not dialogue:
             raise RuntimeError("No saved conversation is available for the morning digest")
         previous_words: set[str] = set()

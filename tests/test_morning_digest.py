@@ -17,6 +17,11 @@ from morning_digest import (
 
 
 class MorningDigestTests(unittest.TestCase):
+    def setUp(self):
+        owner = patch('scheduled_store.owner_id', return_value='')
+        owner.start()
+        self.addCleanup(owner.stop)
+
     def test_openai_structured_digest_persists_and_revalidates(self) -> None:
         import morning_digest
         import os

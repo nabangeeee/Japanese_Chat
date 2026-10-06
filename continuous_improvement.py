@@ -8,7 +8,6 @@ import json
 import os
 import re
 import shutil
-import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -78,22 +77,15 @@ def collect_metrics(
     }
 
 
-def load_metrics(db_path: Path, limit: int = 100) -> dict[str, Any]:
-    if not db_path.exists():
-        return collect_metrics([], negative_feedback_count=0, feedback_count=0)
-    with sqlite3.connect(db_path, timeout=5.0) as conn:
-        conn.execute("PRAGMA busy_timeout = 5000")
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute(
-            "SELECT content, quality_score, response_time_sec FROM messages "
-            "WHERE role = 'assistant' ORDER BY timestamp DESC LIMIT ?", (limit,)
-        ).fetchall()
-        feedback = conn.execute(
-            "SELECT rating FROM message_feedbacks ORDER BY created_at DESC LIMIT ?", (limit,)
-        ).fetchall()
+def load_metrics(project_root: Path, limit: int = 100) -> dict[str, Any]:
+    from scheduled_store import reader
+    with reader(project_root) as read:
+        rows = read('messages', columns='content,quality_score,response_time_sec',
+                    role='eq.assistant', order='timestamp.desc,sort_order.desc', limit=limit)
+        feedback = read('message_feedbacks', columns='rating',
+                        order='created_at.desc,id.desc', limit=limit)
     return collect_metrics(
-        [dict(row) for row in rows],
-        negative_feedback_count=sum(row["rating"] == -1 for row in feedback),
+        rows, negative_feedback_count=sum(row['rating'] == -1 for row in feedback),
         feedback_count=len(feedback),
     )
 
@@ -229,7 +221,7 @@ def record_quality_incident(
 
 
 def observe(*, project_root: Path = ROOT, notify: bool = False) -> list[dict[str, Any]]:
-    metrics = load_metrics(project_root / "nihongo_chat.db")
+    metrics = load_metrics(project_root)
     proposals = [
         create_proposal(
             signal, state_dir=project_root / "scratch" / "improvement",

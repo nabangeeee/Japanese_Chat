@@ -13,6 +13,7 @@ __pycache__/
 .env.local
 .env.supabase
 .env.e2e
+.env.scheduled
 
 # IDE
 .idea/
