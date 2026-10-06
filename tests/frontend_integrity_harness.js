@@ -22,7 +22,8 @@ function setup() {
         map.set(key, value);
     }, removeItem: key => map.delete(key), getItem: key => { if (env.failRead) throw new Error('SecurityError'); return map.get(key); } });
     const context = vm.createContext({
-        crypto: require('node:crypto').webcrypto,
+        crypto: require('node:crypto').webcrypto, Headers,
+        location: {reload() { env.reloaded = true; }},
         console: { log() {}, error() {} }, alert: x => warnings.push(x), confirm: () => true,
         setTimeout() {}, document: { getElementById: get, createElement: element, addEventListener() {},
             querySelectorAll: () => [], querySelector: () => null },
@@ -33,6 +34,8 @@ function setup() {
             return env.reply(request);
         }
     });
+    context.window = context;
+    context.addEventListener = (name, callback) => { env['on' + name] = callback; };
     vm.runInContext(fs.readFileSync('static/app.js', 'utf8'), context);
     const run = code => vm.runInContext(code, context);
     run(`escapeHTML = value => String(value); state.currentSessionId = 'old-session';`);
@@ -40,6 +43,29 @@ function setup() {
 }
 
 const tests = {
+    async accountSwitchClearsScreen() {
+        const h = setup();
+        h.run("state.messages = [{id:'private'}]; state.memories = [{id:1}]; installAccountGuard('account-a')");
+        h.env.onstorage({key:'nihongoAccountChange'});
+        assert.equal(h.run('state.messages.length'), 0);
+        assert.equal(h.run('state.memories.length'), 0);
+        assert.equal(h.run('state.currentSessionId'), null);
+        assert.equal(h.env.reloaded, true);
+        await assert.rejects(h.run("fetch('/api/sessions')"));
+        assert.equal(h.requests.length, 0);
+    },
+    async summaryOpensOriginalConversation() {
+        const h = setup();
+        h.get('memoryModalBackdrop').classList.add('show');
+        h.env.reply = async () => ({ok:true, json:async () => ({
+            session:{session_id:'summary-session',partner_name:'Yuki',difficulty:'beginner',topic:'free',roleplay_id:null,roleplay_args:{}},
+            messages:[{id:'m',role:'assistant',content:'こんにちは'}]
+        })});
+        await h.run("openSummaryConversation('summary-session')");
+        assert.equal(h.run('state.currentSessionId'), 'summary-session');
+        assert.equal(h.get('memoryModalBackdrop').classList.contains('show'), false);
+        assert.equal(h.run('state.messages[0].id'), 'm');
+    },
     async feedbackText() {
         const h = setup();
         h.run("state.messages = [{id:'saved',role:'assistant',content:'reply'}]; openFeedback(null, 'saved')");

@@ -58,6 +58,10 @@ async function initializeAccount() {
         sessionStorage.removeItem('nihongoActiveSessionId');
         const me = await fetch('/api/auth/me');
         if (me.ok) {
+            const account = await me.json();
+            document.getElementById('accountIdentity').textContent = account.email || '로그인됨';
+            document.getElementById('accountIdentity').hidden = false;
+            installAccountGuard(account.user_id);
             panel.hidden = true;
             document.getElementById('accountLogout').hidden = false;
             return true;
@@ -72,6 +76,55 @@ async function initializeAccount() {
         document.getElementById('accountError').textContent = '연결 상태를 확인한 뒤 새로고침해 주세요.';
     }
     return false;
+}
+
+let accountInvalidated = false;
+
+function clearAccountScreen() {
+    if (accountInvalidated) return;
+    accountInvalidated = true;
+    state.messages = [];
+    state.sessions = [];
+    state.memories = [];
+    state.currentSessionId = null;
+    for (const id of ['messages', 'memoryListBody', 'sessionList']) {
+        const element = document.getElementById(id);
+        if (element) element.textContent = '';
+    }
+    const app = document.querySelector('.app');
+    if (app) app.hidden = true;
+    document.getElementById('memoryModalBackdrop')?.classList.remove('show');
+    location.reload();
+}
+
+function announceAccountChange() {
+    try { localStorage.setItem('nihongoAccountChange', crypto.randomUUID()); } catch (_) {}
+}
+
+function installAccountGuard(userId) {
+    const originalFetch = window.fetch.bind(window);
+    window.fetch = async (input, options = {}) => {
+        if (typeof input !== 'string' || !input.startsWith('/api/')) return originalFetch(input, options);
+        if (accountInvalidated) throw new Error('계정이 변경됐어요.');
+        const headers = new Headers(options.headers || {});
+        headers.set('X-Nihongo-User', userId);
+        const response = await originalFetch(input, {...options, headers});
+        if (response.status === 401 || (response.status === 409 && (await response.clone().json()).detail === 'ACCOUNT_CHANGED')) {
+            clearAccountScreen();
+            throw new Error('로그인 상태가 변경됐어요.');
+        }
+        if (accountInvalidated) throw new Error('계정이 변경됐어요.');
+        return response;
+    };
+    window.addEventListener('storage', event => {
+        if (event.key === 'nihongoAccountChange') clearAccountScreen();
+    });
+    window.addEventListener('focus', async () => {
+        try {
+            const response = await originalFetch('/api/auth/me');
+            if (response.status === 401 || (response.ok && (await response.json()).user_id !== userId)) clearAccountScreen();
+        } catch (_) { /* Offline is not an account change. */ }
+    });
 }
 
 async function submitAccount(event, signup = false) {
@@ -91,7 +144,7 @@ async function submitAccount(event, signup = false) {
         const result = await response.json();
         if (!response.ok) throw new Error(typeof result.detail === 'string' ? result.detail : '입력 내용을 확인해 주세요.');
         document.getElementById('accountPassword').value = '';
-        if (result.signed_in) location.reload();
+        if (result.signed_in) { announceAccountChange(); location.reload(); }
         else error.textContent = result.message;
     } catch (exception) {
         error.textContent = exception.message || '로그인하지 못했어요. 다시 시도해 주세요.';
@@ -106,7 +159,8 @@ async function logoutAccount() {
     localStorage.removeItem('nihongoMessages');
     localStorage.removeItem('nihongoSettings');
     sessionStorage.removeItem('nihongoActiveSessionId');
-    location.reload();
+    announceAccountChange();
+    clearAccountScreen();
 }
 
 function autoResize() {
@@ -679,6 +733,7 @@ async function loadAndRenderMemories() {
                             </div>
                             <div class="memory-corrected">${escapeHTML(s.title || '대화 세션 요약')}</div>
                             <div class="memory-explanation">${escapeHTML(s.summary || '')}</div>
+                            <button class="text-action" data-session-id="${escapeAttribute(s.session_id)}" onclick="openSummaryConversation(this.dataset.sessionId)">대화 원문 보기</button>
                         </div>
                     `).join('');
                 }
@@ -693,6 +748,13 @@ async function loadAndRenderMemories() {
 }
 
 // 메시지 저장
+async function openSummaryConversation(sessionId) {
+    if (state.isLoading || state.isSavingSettings || state.isSessionTransition) return;
+    document.getElementById('memoryModalBackdrop').classList.remove('show');
+    syncOverlayFocus();
+    await switchSession(sessionId, false);
+}
+
 function saveMessages() {
     try {
         localStorage.setItem('nihongoMessages', JSON.stringify(state.messages));

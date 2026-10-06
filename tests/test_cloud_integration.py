@@ -61,6 +61,16 @@ class CloudIntegrationTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             database.get_db_connection()
 
+    def test_stale_tab_cannot_access_new_account(self):
+        user = {'id': '11111111-1111-4111-8111-111111111111', 'email': 'test@example.com'}
+        with patch('cloud_auth.auth_call', new=AsyncMock(return_value=user)):
+            response = self.client.get('/api/records', headers={
+                'Authorization': 'Bearer valid', 'X-Nihongo-User': 'old-account'})
+            self.assertEqual(response.status_code, 409)
+            self.assertEqual(self.seen, [])
+            me = self.client.get('/api/auth/me', headers={'Authorization':'Bearer valid'})
+            self.assertEqual(me.json()['email'], 'test@example.com')
+
     def test_rest_uses_user_token_and_owner_filter(self):
         import httpx
         marker = cloud_store.identity.set({'id':'owner-a','token':'user-token'})

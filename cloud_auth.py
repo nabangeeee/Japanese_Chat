@@ -68,7 +68,11 @@ class SupabaseAuthMiddleware:
                 refreshed = await auth_call('token?grant_type=refresh_token', data={'refresh_token': refresh})
                 token = refreshed['access_token']
                 user = await auth_call('user', token=token)
-            context = store.identity.set({'id': str(UUID(user['id'])), 'token': token})
+            verified_id = str(UUID(user['id']))
+            expected_id = request.headers.get('x-nihongo-user')
+            if expected_id and expected_id != verified_id:
+                raise HTTPException(409, 'ACCOUNT_CHANGED')
+            context = store.identity.set({'id': verified_id, 'token': token, 'email': user.get('email', '')})
         except HTTPException as exc:
             return await JSONResponse({'detail': exc.detail}, exc.status_code)(scope, receive, send)
         async def authenticated_send(message):
@@ -99,7 +103,7 @@ async def status():
 
 @auth_router.get('/me')
 async def me():
-    return {'user_id': store.owner()}
+    return {'user_id': store.owner(), 'email': store.identity.get().get('email', '')}
 
 
 @auth_router.post('/login')
