@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import stat
 import shutil
 import subprocess
@@ -78,7 +79,7 @@ def _sandbox_profile(
 (allow default)
 (deny file-read* (subpath "{_seatbelt_literal(user_home)}") (subpath "/private/var/folders") (subpath "/private/tmp"))
 (deny file-write*)
-(allow file-read* (subpath "{_seatbelt_literal(workspace)}") (subpath "{_seatbelt_literal(agent_home)}") (subpath "{_seatbelt_literal(hermes_root)}") (subpath "{_seatbelt_literal(uv_root)}") (subpath "{_seatbelt_literal(project_venv)}"))
+(allow file-read* (subpath "{_seatbelt_literal(workspace)}") (subpath "{_seatbelt_literal(agent_home)}") (subpath "{_seatbelt_literal(hermes_root)}") (subpath "{_seatbelt_literal(uv_root)}") (subpath "{_seatbelt_literal(project_venv)}") (subpath "{_seatbelt_literal(Path(sys.base_prefix))}"))
 (allow file-read* {read_parent_rules})
 {workspace_write_rule}
 (allow file-write* (subpath "{_seatbelt_literal(agent_home)}") (literal "/dev/null") {parent_rules})

@@ -431,6 +431,9 @@ class ContinuousImprovementTests(unittest.TestCase):
 
     @unittest.skipIf(os.getenv("NIHONGO_SANDBOX_ACTIVE") == "1", "host integration")
     def test_verified_improvement_is_committed_and_pushed_to_origin(self) -> None:
+        def local_command(command, *, workspace, timeout_seconds, **kwargs):
+            return subprocess.run(command, cwd=workspace, capture_output=True, text=True, timeout=timeout_seconds, env={**os.environ, "GIT_OPTIONAL_LOCKS":"0"})
+        self.enterContext(patch('continuous_improvement.run_sandboxed_command', side_effect=local_command))
         signal = ImprovementSignal("quality", "응답 품질", "근거", ["테스트"], {"score": 5})
         with tempfile.TemporaryDirectory() as temp_dir:
             parent = Path(temp_dir)

@@ -53,6 +53,9 @@ class AutonomousRepairTests(unittest.TestCase):
 
     @unittest.skipIf(os.getenv("NIHONGO_SANDBOX_ACTIVE") == "1", "host integration")
     def test_verified_runtime_commit_applies_without_advancing_main_head(self) -> None:
+        def local_command(command, *, workspace, timeout_seconds, **kwargs):
+            return subprocess.run(command, cwd=workspace, capture_output=True, text=True, timeout=timeout_seconds, env={**os.environ, "GIT_OPTIONAL_LOCKS":"0"})
+        self.enterContext(patch('autonomous_repair.run_sandboxed_command', side_effect=local_command))
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             subprocess.run(["git", "init", "-q"], cwd=root, check=True)

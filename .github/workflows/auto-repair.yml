@@ -1,0 +1,65 @@
+name: Bounded Hermes automatic repair
+on:
+  schedule:
+    - cron: '20 13 * * *' # 22:20 Asia/Seoul; GitHub may delay scheduling.
+  workflow_dispatch:
+permissions:
+  contents: write
+  actions: read
+concurrency:
+  group: nihongo-automatic-repair
+  cancel-in-progress: false
+jobs:
+  repair:
+    if: vars.NIHONGO_AUTO_REPAIR == 'true'
+    runs-on: macos-14
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install trusted runtime and pinned Hermes
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install -r requirements.txt
+          cp "$(command -v node)" .venv/bin/node
+          git clone https://github.com/NousResearch/hermes-agent.git "$HOME/.hermes/hermes-agent"
+          git -C "$HOME/.hermes/hermes-agent" checkout 6064668c8fd2dbbb232ea073b32c9d06d932fa56
+          python -m venv "$HOME/.hermes/hermes-agent/venv"
+          "$HOME/.hermes/hermes-agent/venv/bin/pip" install "$HOME/.hermes/hermes-agent"
+      - name: Configure trusted publisher
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name 'Nihongo automatic repair'
+          git config user.email 'nihongo-repair@users.noreply.github.com'
+          git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf https://github.com/
+      - name: Run bounded repair and verify deployment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OPENAI_API_KEY: ${{ secrets.NIHONGO_REPAIR_OPENAI_API_KEY }}
+          NIHONGO_AUTO_REPAIR: ${{ vars.NIHONGO_AUTO_REPAIR }}
+          NIHONGO_REPAIR_MODEL: gpt-4.1-mini
+          LANGFUSE_TRACING_ENABLED: 'false'
+        run: |
+          test -n "$OPENAI_API_KEY"
+          .venv/bin/python automation/model_proxy.py &
+          proxy_pid=$!
+          trap 'kill "$proxy_pid" 2>/dev/null || true' EXIT
+          .venv/bin/python automation/auto_repair.py
+      - name: Save private-data-free proposal report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: automatic-repair-report
+          path: scratch/improvement/proposals/*.json
+          retention-days: 14
+          if-no-files-found: ignore

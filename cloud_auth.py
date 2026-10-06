@@ -1,4 +1,5 @@
 """Same-origin Auth gateway; credentials/tokens never enter application storage."""
+import os
 from uuid import UUID
 from urllib.parse import urlsplit
 import httpx
@@ -98,7 +99,7 @@ class Credentials(BaseModel):
 
 @auth_router.get('/status')
 async def status():
-    return JSONResponse({'enabled': True}, headers={'Cache-Control': 'no-store'})
+    return JSONResponse({'enabled': True, 'revision': os.getenv('RENDER_GIT_COMMIT', '')}, headers={'Cache-Control': 'no-store'})
 
 
 @auth_router.get('/me')
