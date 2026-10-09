@@ -1,6 +1,7 @@
 """Supabase Data API using the verified user's JWT, never an administrator key."""
 from contextvars import ContextVar
 from datetime import datetime, timezone
+import json
 import os
 import httpx
 from fastapi import HTTPException
@@ -25,7 +26,9 @@ def request(method, path, *, params=None, data=None, prefer=None):
     if prefer:
         headers['Prefer'] = prefer
     try:
-        response = httpx.request(method, url + '/rest/v1/' + path, params=params,
+        client = user.get('http_client')
+        send = client.request if client is not None else httpx.request
+        response = send(method, url + '/rest/v1/' + path, params=params,
                                  json=data, headers=headers, timeout=20)
     except httpx.HTTPError:
         raise HTTPException(503, '기록 저장소에 연결하지 못했습니다.') from None
@@ -151,6 +154,18 @@ def save_session_summary(session_id, summary_text):
 def get_session_summary(session_id):
     rows = select('session_summaries', session_id='eq.' + session_id)
     return rows[0]['summary_text'] if rows else None
+
+
+def get_session_summaries(session_ids):
+    """Fetch only the displayed sessions, in bounded batches instead of N reads."""
+    summaries = {}
+    for start in range(0, len(session_ids), 100):
+        batch = session_ids[start:start + 100]
+        rows = select('session_summaries',
+                      session_id='in.(' + ','.join(json.dumps(s) for s in batch) + ')',
+                      select='session_id,summary_text', limit=len(batch))
+        summaries.update((row['session_id'], row['summary_text']) for row in rows)
+    return summaries
 
 
 def save_user_fact(fact_key, fact_value):

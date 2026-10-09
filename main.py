@@ -1,3 +1,5 @@
+import asyncio
+import httpx
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -22,6 +24,7 @@ from cloud_store import (
     get_session_messages, save_user_memory, get_user_memories,
     save_session_summary, get_session_summary, save_user_fact, get_all_user_facts,
     save_message_feedback, update_message_quality_score,
+    get_session_summaries,
     get_message, save_message_detail, get_saved_turn, save_chat_turn,
     get_practice_memories, record_memory_review
 )
@@ -37,8 +40,16 @@ load_dotenv('.env.supabase')
 async def lifespan(app: FastAPI):
     # 앱 시작 시 실행 (Startup)
     init_db()
-    yield
-    # 앱 종료 시 필요한 작업이 있다면 여기에 작성
+    # Reuse connections across requests; credentials remain request-scoped.
+    with httpx.Client(timeout=20) as storage_client:
+        async with httpx.AsyncClient(timeout=15) as auth_client:
+            app.state.storage_client = storage_client
+            app.state.auth_client = auth_client
+            try:
+                yield
+            finally:
+                del app.state.storage_client
+                del app.state.auth_client
 
 
 app = FastAPI(title="니혼고챗", description="일본어 학습 채팅 앱", lifespan=lifespan)
@@ -461,14 +472,14 @@ async def api_render_mcp_prompt(req: MCPGetPromptRequest):
 @app.get("/api/sessions")
 async def list_sessions():
     """저장된 전체 대화 세션 목록 반환"""
-    return {"sessions": get_all_sessions()}
+    return {"sessions": await run_in_threadpool(get_all_sessions)}
 
 
 @app.post("/api/sessions")
 async def api_create_session(req: CreateSessionRequest):
     """새 대화 세션 생성"""
     sess_id = str(uuid.uuid4())
-    session_data = create_session(
+    session_data = await run_in_threadpool(create_session,
         session_id=sess_id,
         title=req.title,
         partner_name=req.partner_name,
@@ -483,17 +494,17 @@ async def api_create_session(req: CreateSessionRequest):
 @app.get("/api/sessions/{session_id}")
 async def get_session_detail(session_id: str):
     """특정 세션 정보 및 메시지 이력 반환"""
-    session = get_session(session_id)
+    session = await run_in_threadpool(get_session, session_id)
     if not session:
         raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다.")
-    messages = get_session_messages(session_id)
+    messages = await run_in_threadpool(get_session_messages, session_id)
     return {"session": session, "messages": messages}
 
 
 @app.delete("/api/sessions/{session_id}")
 async def api_delete_session(session_id: str):
     """특정 세션 삭제"""
-    deleted = delete_session(session_id)
+    deleted = await run_in_threadpool(delete_session, session_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="삭제할 세션을 찾을 수 없습니다.")
     return {"status": "deleted", "session_id": session_id}
@@ -502,17 +513,17 @@ async def api_delete_session(session_id: str):
 @app.get("/api/memories")
 async def api_list_memories():
     """학습자의 오답 노트 및 개인화 메모리 목록 반환"""
-    return {"memories": get_user_memories(limit=30)}
+    return {"memories": await run_in_threadpool(get_user_memories, limit=30)}
 
 
 @app.get("/api/memories/practice")
 async def api_practice_memories():
-    return {"memories": get_practice_memories()}
+    return {"memories": await run_in_threadpool(get_practice_memories)}
 
 
 @app.post("/api/memories/{memory_id}/review")
 async def api_review_memory(memory_id: int, req: MemoryReviewRequest):
-    if not record_memory_review(memory_id, req.remembered):
+    if not await run_in_threadpool(record_memory_review, memory_id, req.remembered):
         raise HTTPException(status_code=404, detail="오답을 찾을 수 없습니다.")
     return {"status": "saved"}
 
@@ -520,13 +531,19 @@ async def api_review_memory(memory_id: int, req: MemoryReviewRequest):
 @app.get("/api/facts")
 async def api_list_facts():
     """학습자 장기 기억 프로필 (유저 팩트 및 세션 요약) 목록 반환"""
-    facts = [f for f in get_all_user_facts()
+    all_facts, sessions = await asyncio.gather(
+        run_in_threadpool(get_all_user_facts),
+        run_in_threadpool(get_all_sessions),
+    )
+    facts = [f for f in all_facts
              if meaningful_memory(f.get('fact_value'))
              and not (f.get('fact_key') or '').startswith('disliked_pattern_')]
-    sessions = get_all_sessions()
+    summary_by_session = await run_in_threadpool(
+        get_session_summaries, [s["session_id"] for s in sessions],
+    )
     summaries = []
     for s in sessions:
-        sum_text = get_session_summary(s["session_id"])
+        sum_text = summary_by_session.get(s["session_id"])
         if sum_text:
             summaries.append({
                 "session_id": s["session_id"],
@@ -542,7 +559,7 @@ async def api_submit_feedback(req: FeedbackRequest, bg_tasks: BackgroundTasks):
     """사용자 👍/👎 피드백 수신 및 백그라운드 Self-Refinement 분석"""
     req.feedback_text = (req.feedback_text or '').strip() or None
     try:
-        fb = save_message_feedback(req.message_id, req.session_id, req.rating, req.feedback_text)
+        fb = await run_in_threadpool(save_message_feedback, req.message_id, req.session_id, req.rating, req.feedback_text)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
     if req.rating == -1:
@@ -562,14 +579,14 @@ async def chat(req: ChatRequest, bg_tasks: BackgroundTasks):
     _assert_no_prompt_injection(req.message)
     _scan_history_for_injection(req.history)
 
-    if req.session_id is not None and not get_session(req.session_id):
+    if req.session_id is not None and not await run_in_threadpool(get_session, req.session_id):
         raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다.")
 
     user_msg_id = str(req.request_id or uuid.uuid4()) if req.session_id else None
     assistant_msg_id = str(uuid.uuid5(uuid.NAMESPACE_URL, "nihongo:" + user_msg_id)) if user_msg_id else None
     if user_msg_id:
         try:
-            saved = get_saved_turn(user_msg_id, assistant_msg_id, req.session_id, req.message)
+            saved = await run_in_threadpool(get_saved_turn, user_msg_id, assistant_msg_id, req.session_id, req.message)
         except ValueError:
             raise HTTPException(status_code=409, detail="이미 사용한 전송 번호입니다.") from None
         if saved:
@@ -604,10 +621,10 @@ async def chat(req: ChatRequest, bg_tasks: BackgroundTasks):
         
         # 세션 ID가 제공되었다면 유저 메시지 및 AI 답장 DB 저장 (소요 런타임 초 정밀 기록)
         if req.session_id:
-            if not get_session(req.session_id):
+            if not await run_in_threadpool(get_session, req.session_id):
                 raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다.")
             try:
-                clean_res, created = save_chat_turn(
+                clean_res, created = await run_in_threadpool(save_chat_turn,
                     user_msg_id, assistant_msg_id, req.session_id, req.message, clean_res, elapsed,
                 )
             except ValueError:
@@ -728,7 +745,7 @@ def _persist_detail(req: TranslateRequest, field: str, value: str) -> None:
 @app.post("/api/translate")
 @observe(name="nihongo_translate", as_type="generation")
 async def translate(req: TranslateRequest, bg_tasks: BackgroundTasks):
-    cached = _saved_detail(req, "translation")
+    cached = await run_in_threadpool(_saved_detail, req, "translation")
     if cached:
         return {"translation": cached}
     effective_api_key = req.api_key or os.getenv("OPENAI_API_KEY")
@@ -746,7 +763,7 @@ async def translate(req: TranslateRequest, bg_tasks: BackgroundTasks):
         clean_tr = clean_translation_text(redact_sensitive_output(raw or ""))
         if not clean_tr.strip():
             raise ProviderOutputError("Translation was empty after cleanup")
-        _persist_detail(req, "translation", clean_tr)
+        await run_in_threadpool(_persist_detail, req, "translation", clean_tr)
         return {"translation": clean_tr}
 
     except HTTPException:
@@ -760,7 +777,7 @@ async def translate(req: TranslateRequest, bg_tasks: BackgroundTasks):
 @app.post("/api/furigana")
 @observe(name="nihongo_furigana", as_type="generation")
 async def furigana(req: TranslateRequest, bg_tasks: BackgroundTasks):
-    cached = _saved_detail(req, "furigana")
+    cached = await run_in_threadpool(_saved_detail, req, "furigana")
     if cached and normalize_furigana_output(cached, req.text):
         return {"furigana": cached}
     effective_api_key = req.api_key or os.getenv("OPENAI_API_KEY")
@@ -792,7 +809,7 @@ async def furigana(req: TranslateRequest, bg_tasks: BackgroundTasks):
                 status_code=502,
                 detail="히라가나 읽는 법 생성에 실패했습니다. 다시 시도해 주세요.",
             )
-        _persist_detail(req, "furigana", clean_furi)
+        await run_in_threadpool(_persist_detail, req, "furigana", clean_furi)
         return {"furigana": clean_furi}
 
     except HTTPException:

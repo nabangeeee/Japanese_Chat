@@ -31,6 +31,7 @@ OpenAI `gpt-6-astra` handles chat, learning utilities, quality review, and the d
 - Translation and reading results are stored with the assistant message and reused when reopening a session. Each result appears as soon as it is ready, with retry controls for failed requests.
 - **학습 노트 → 오늘의 복습** shows up to three due expressions per visit. Write a correction, reveal the example, and self-assess: difficult expressions return after one day; remembered expressions return after seven days. This practice flow makes no model calls.
 - Session summaries update every three completed conversation turns. Existing conversations and notes are preserved by additive database migrations on server startup.
+- Navigation and notebook storage calls run off the server's event loop, so a slow Supabase request does not block other screens. The notebook fetches summaries in batches of up to 100 sessions, and the server reuses HTTP connections while still verifying every request's user and preserving per-user RLS.
 
 ### Relevant learning memory (local RAG)
 - Chat retrieves up to three relevant corrections from the authenticated user’s Supabase learning notebook instead of always including the five newest notes. Older notes remain searchable.

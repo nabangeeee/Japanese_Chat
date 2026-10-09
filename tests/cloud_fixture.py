@@ -2,6 +2,7 @@
 from copy import deepcopy
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+import json
 from threading import RLock
 from unittest.mock import patch
 import cloud_store
@@ -44,7 +45,9 @@ def cloud_fixture():
         rows = tables[path]
         def matches(row):
             return row['user_id'] == owner and all(
-                str(row.get(k)) == str(v)[3:] for k, v in params.items() if str(v).startswith('eq.'))
+                str(row.get(k)) == str(v)[3:] for k, v in params.items() if str(v).startswith('eq.')) and all(
+                row.get(k) in json.loads('[' + v[4:-1] + ']')
+                for k, v in params.items() if isinstance(v, str) and v.startswith('in.('))
         selected = [r for r in rows if matches(r)]
         if method == 'GET':
             order = params.get('order', '')
